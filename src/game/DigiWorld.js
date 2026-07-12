@@ -746,6 +746,7 @@ export class DigiWorld {
       !mode?.setBoundedFloorFootprint ||
       (this.xrHitTestSource && !this.arPlaced)
     ) return;
+    if (this.arBoundedFloorMode === mode && this.arBoundedFloor) return;
     const pose = frame.getPose(boundedSpace, referenceSpace);
     if (!pose) return;
     mode.root.updateWorldMatrix(true, false);
@@ -786,10 +787,10 @@ export class DigiWorld {
       .map((vertex) => `${vertex.x.toFixed(2)},${vertex.y.toFixed(2)},${vertex.z.toFixed(2)}`)
       .join('|');
     if (signature === this.arBoundedFloorSignature && mode === this.arBoundedFloorMode) return;
+    if (!mode.setBoundedFloorFootprint(footprint)) return;
     this.arBoundedFloorSignature = signature;
     this.arBoundedFloorMode = mode;
     this.arBoundedFloor = footprint;
-    mode.setBoundedFloorFootprint(footprint);
   }
 
   updateARPlacement(frame) {

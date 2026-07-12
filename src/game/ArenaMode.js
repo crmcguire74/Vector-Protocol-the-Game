@@ -192,15 +192,27 @@ export class ArenaMode {
     const preset = presets[this.roomPreset] || presets.portal;
     const centerX = 0;
     const floorY = 0;
+    const minX = centerX - preset.width * 0.5;
+    const maxX = centerX + preset.width * 0.5;
+    const minZ = preset.centerZ - preset.depth * 0.5;
+    const maxZ = preset.centerZ + preset.depth * 0.5;
     return {
       ...preset,
       centerX,
       floorY,
       ceilingY: preset.wallHeight,
-      minX: centerX - preset.width * 0.5,
-      maxX: centerX + preset.width * 0.5,
-      minZ: preset.centerZ - preset.depth * 0.5,
-      maxZ: preset.centerZ + preset.depth * 0.5,
+      minX,
+      maxX,
+      minZ,
+      maxZ,
+      area: preset.width * preset.depth,
+      signedArea: preset.width * preset.depth,
+      vertices: [
+        { x: minX, y: floorY, z: minZ },
+        { x: maxX, y: floorY, z: minZ },
+        { x: maxX, y: floorY, z: maxZ },
+        { x: minX, y: floorY, z: maxZ },
+      ],
       source: 'preset-room-footprint',
     };
   }
@@ -1560,10 +1572,19 @@ export class ArenaMode {
       roomFootprint: this.arRoom
         ? {
             source: this.arRoom.source,
+            presetFallback: this.roomPreset,
+            width: +this.arRoom.width.toFixed(2),
+            depth: +this.arRoom.depth.toFixed(2),
+            area: +this.arRoom.area.toFixed(2),
             minX: +this.arRoom.minX.toFixed(2),
             maxX: +this.arRoom.maxX.toFixed(2),
             minZ: +this.arRoom.minZ.toFixed(2),
             maxZ: +this.arRoom.maxZ.toFixed(2),
+            vertices: this.arRoom.vertices.map((vertex) => ({
+              x: +vertex.x.toFixed(2),
+              y: +vertex.y.toFixed(2),
+              z: +vertex.z.toFixed(2),
+            })),
           }
         : null,
       breaches: this.breaches.map((breach) => ({
