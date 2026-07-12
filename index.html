@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      name="description"
+      content="Digi World — a cinematic WebXR disc-combat and light-cycle experience for desktop, VR, and AR."
+    />
+    <meta name="theme-color" content="#02050a" />
+    <title>Digi World — Enter the Breach</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#launch-button">Skip to deployment controls</a>
+
+    <canvas
+      id="game-canvas"
+      aria-label="Digi World interactive 3D viewport"
+      aria-describedby="desktop-controls"
+    ></canvas>
+
+    <div class="ambient-chrome" aria-hidden="true">
+      <div class="ambient-chrome__arc ambient-chrome__arc--one"></div>
+      <div class="ambient-chrome__arc ambient-chrome__arc--two"></div>
+      <div class="ambient-chrome__horizon"></div>
+      <div class="ambient-chrome__grain"></div>
+    </div>
+
+    <div id="loading-screen" role="status" aria-live="polite" aria-label="Initializing Digi World">
+      <div class="boot-sequence">
+        <div class="boot-sigil" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <p class="boot-kicker">D/W SYSTEM // 7.11</p>
+        <p class="boot-title">OPENING THE BREACH</p>
+        <div class="boot-meter" aria-hidden="true"><i></i></div>
+        <p class="boot-status">Calibrating spatial lattice</p>
+      </div>
+    </div>
+
+    <main id="menu" class="screen" aria-label="Digi World main menu">
+      <header class="menu-topline">
+        <div class="wordmark" aria-label="Digi World">
+          <span class="wordmark__mark" aria-hidden="true"></span>
+          <span>D/W</span>
+        </div>
+        <p><span class="live-pip" aria-hidden="true"></span> Lattice online</p>
+        <p class="menu-topline__coordinates">SECTOR 07 / NODE 11 / <span>UNBOUND</span></p>
+      </header>
+
+      <div class="menu-layout">
+        <section class="hero-copy" aria-labelledby="game-title">
+          <p class="section-index"><span>01</span> The fracture protocol</p>
+          <h1 id="game-title">
+            <span class="title-digi">DIGI</span>
+            <span class="title-world">WORLD</span>
+          </h1>
+          <p class="hero-copy__lede">
+            The old grid is gone. Fight across its fragments, breach the room around you,
+            and leave nothing behind but light.
+          </p>
+
+          <div class="hero-metrics" aria-label="Game features">
+            <div><strong>02</strong><span>combat systems</span></div>
+            <div><strong>03</strong><span>reality modes</span></div>
+            <div><strong>&infin;</strong><span>fracture paths</span></div>
+          </div>
+
+          <div class="hero-sigil" aria-hidden="true">
+            <i></i><i></i><i></i><i></i>
+            <span>DW</span>
+          </div>
+        </section>
+
+        <section class="deployment-console" aria-labelledby="deployment-heading">
+          <div class="console-header">
+            <div>
+              <p class="console-header__eyebrow">Mission configuration</p>
+              <h2 id="deployment-heading">Choose your breach</h2>
+            </div>
+            <span class="console-header__step">01—03</span>
+          </div>
+
+          <fieldset class="control-group">
+            <legend><span>01</span> Reality layer</legend>
+            <div class="presentation-grid">
+              <button
+                class="presentation-option is-selected"
+                type="button"
+                data-presentation="desktop"
+                aria-pressed="true"
+              >
+                <span class="option-icon option-icon--screen" aria-hidden="true"></span>
+                <span class="option-copy"><strong>Normal</strong><small>Keyboard + mouse</small></span>
+                <span class="option-index">A</span>
+              </button>
+              <button
+                class="presentation-option"
+                type="button"
+                data-presentation="vr"
+                aria-pressed="false"
+              >
+                <span class="option-icon option-icon--vr" aria-hidden="true"></span>
+                <span class="option-copy"><strong>VR</strong><small>Full immersion</small></span>
+                <span class="option-index">B</span>
+              </button>
+              <button
+                class="presentation-option"
+                type="button"
+                data-presentation="ar"
+                aria-pressed="false"
+              >
+                <span class="option-icon option-icon--ar" aria-hidden="true"></span>
+                <span class="option-copy"><strong>AR</strong><small>Room breach</small></span>
+                <span class="option-index">C</span>
+              </button>
+            </div>
+          </fieldset>
+
+          <section id="preset-picker" class="control-group preset-picker hidden" aria-labelledby="preset-heading">
+            <h3 id="preset-heading"><span>02</span> Room topology</h3>
+            <div class="preset-grid">
+              <button class="preset-option is-selected" type="button" data-preset="portal" aria-pressed="true">
+                <span class="preset-glyph preset-glyph--portal" aria-hidden="true"></span>
+                <strong>Portal</strong><small>Single breach</small>
+              </button>
+              <button class="preset-option" type="button" data-preset="arena" aria-pressed="false">
+                <span class="preset-glyph preset-glyph--arena" aria-hidden="true"></span>
+                <strong>Arena</strong><small>Room shell</small>
+              </button>
+              <button class="preset-option" type="button" data-preset="tabletop" aria-pressed="false">
+                <span class="preset-glyph preset-glyph--tabletop" aria-hidden="true"></span>
+                <strong>Tabletop</strong><small>Scaled grid</small>
+              </button>
+            </div>
+          </section>
+
+          <fieldset class="control-group game-select">
+            <legend><span>02</span> Combat program</legend>
+            <div class="game-grid">
+              <button class="game-option is-selected" type="button" data-game="arena" aria-pressed="true">
+                <span class="game-glyph game-glyph--disc" aria-hidden="true"><i></i></span>
+                <span class="game-option__copy">
+                  <small>Program 01</small>
+                  <strong>Shard Arena</strong>
+                  <em>Throw. Recall. Ascend.</em>
+                </span>
+                <span class="game-option__status">Selected</span>
+              </button>
+              <button class="game-option" type="button" data-game="bike" aria-pressed="false">
+                <span class="game-glyph game-glyph--bike" aria-hidden="true"><i></i></span>
+                <span class="game-option__copy">
+                  <small>Program 02</small>
+                  <strong>Lightline Pursuit</strong>
+                  <em>Ride. Divide. Survive.</em>
+                </span>
+                <span class="game-option__status">Available</span>
+              </button>
+            </div>
+          </fieldset>
+
+          <div class="selection-readout" aria-live="polite">
+            <span>Deploying</span>
+            <strong><span id="selected-game-label">Shard Arena</span> / <span id="selected-reality-label">Normal</span></strong>
+          </div>
+
+          <button id="launch-button" type="button">
+            <span class="launch-button__index">03</span>
+            <span class="launch-button__copy"><small>System armed</small><strong>Enter Digi World</strong></span>
+            <span class="launch-button__arrow" aria-hidden="true">&rarr;</span>
+          </button>
+
+          <p class="compatibility-note">
+            <span aria-hidden="true">&#9671;</span> Immersive modes require a compatible WebXR device.
+          </p>
+        </section>
+      </div>
+
+      <aside id="desktop-controls" class="controls-strip" aria-label="Desktop controls">
+        <p class="controls-strip__label"><span>Control matrix</span> / Desktop</p>
+        <ul>
+          <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Move</span></li>
+          <li><kbd>Mouse</kbd><span>Aim</span></li>
+          <li><kbd>Click</kbd><span>Throw / fire</span></li>
+          <li><kbd>Space</kbd><span>Jump</span></li>
+          <li><kbd>Shift</kbd><span>Dash / boost</span></li>
+          <li><kbd>Esc</kbd><span>Pause</span></li>
+        </ul>
+      </aside>
+    </main>
+
+    <section id="hud" class="hidden" aria-label="Mission status">
+      <div class="hud-corner hud-corner--top-left">
+        <p class="hud-caption">Active program</p>
+        <strong id="hud-mode">DISC ARENA</strong>
+        <p id="objective" aria-live="polite">Eliminate the sentinels</p>
+      </div>
+
+      <div class="hud-score-block">
+        <span>Score</span>
+        <strong id="hud-score">000000</strong>
+        <div id="combo" class="hidden" aria-live="polite">CHAIN x2</div>
+      </div>
+
+      <div class="hud-vitals hud-corner hud-corner--bottom-left">
+        <div class="vital-label"><span>Integrity</span><strong id="hud-health">100</strong></div>
+        <div class="vital-track vital-track--health"><i id="health-fill"></i></div>
+        <div class="vital-label"><span>Energy</span><strong id="hud-resource">100</strong></div>
+        <div class="vital-track vital-track--resource"><i id="resource-fill"></i></div>
+      </div>
+
+      <div id="crosshair" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+      <div id="speed-readout" class="hidden" aria-live="off">
+        <strong>000</strong><span>KM/H</span><i></i>
+      </div>
+
+      <div id="minimap" aria-label="Proximity scanner">
+        <span class="minimap__label">Proximity</span>
+        <i class="minimap__sweep" aria-hidden="true"></i>
+        <i class="minimap__player" aria-hidden="true"></i>
+      </div>
+
+      <p class="hud-footer-code" aria-hidden="true">DW // LIVE THREAD // 07.11.89</p>
+    </section>
+
+    <div id="announcement" class="hidden" role="status" aria-live="assertive"></div>
+    <div id="damage-flash" class="hidden" aria-hidden="true"></div>
+    <div id="comfort-vignette" class="hidden" aria-hidden="true"></div>
+    <div id="toast" class="hidden" role="status" aria-live="polite"></div>
+
+    <section
+      id="pause-menu"
+      class="screen modal-screen hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pause-title"
+    >
+      <div class="modal-card pause-card">
+        <p class="modal-card__eyebrow">Simulation suspended</p>
+        <h2 id="pause-title">Thread paused</h2>
+        <p>The grid will hold your position.</p>
+        <div class="modal-actions">
+          <button id="resume-button" class="primary-action" type="button"><span>Resume</span><i aria-hidden="true">R</i></button>
+          <button id="restart-button" type="button"><span>Restart program</span><i aria-hidden="true">↻</i></button>
+          <button id="exit-button" type="button"><span>Exit to lattice</span><i aria-hidden="true">×</i></button>
+        </div>
+        <p class="modal-card__code">DW / HOLD STATE / NO SIGNAL LOSS</p>
+      </div>
+    </section>
+
+    <section
+      id="result-screen"
+      class="screen modal-screen hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="result-title"
+    >
+      <div class="modal-card result-card">
+        <p class="modal-card__eyebrow">Program report</p>
+        <h2 id="result-title">Breach complete</h2>
+        <p id="result-detail">The lattice has recorded your run.</p>
+        <div class="result-divider" aria-hidden="true"><i></i><span>DW</span><i></i></div>
+        <div class="modal-actions modal-actions--row">
+          <button id="again-button" class="primary-action" type="button"><span>Run it again</span><i aria-hidden="true">↻</i></button>
+          <button id="menu-button" type="button"><span>Main menu</span><i aria-hidden="true">⌂</i></button>
+        </div>
+      </div>
+    </section>
+
+    <button id="xr-exit" class="hidden" type="button" aria-label="Exit immersive mode">
+      <span aria-hidden="true">×</span> Exit XR
+    </button>
+
+    <nav id="touch-controls" class="hidden" aria-label="Touch game controls">
+      <div class="touch-controls__steer">
+        <button id="touch-left" type="button" aria-label="Move or turn left">‹</button>
+        <button id="touch-right" type="button" aria-label="Move or turn right">›</button>
+      </div>
+      <div class="touch-controls__actions">
+        <button id="touch-secondary" type="button">Jump</button>
+        <button id="touch-primary" type="button">Throw</button>
+      </div>
+    </nav>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
