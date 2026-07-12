@@ -1100,7 +1100,10 @@ export class DigiWorld {
     this.ui.pauseMenu.classList.add('hidden');
     this.ui.resultScreen.classList.add('hidden');
     this.ui.hud.classList.remove('hidden');
-    this.ui.minimap.classList.toggle('hidden', gameMode !== 'bike');
+    const usesHeadLockedBikeMap = gameMode === 'bike' && (
+      this.presentation === 'vr' || this.requestedPresentation === 'vr'
+    );
+    this.ui.minimap.classList.toggle('hidden', gameMode !== 'bike' || usesHeadLockedBikeMap);
     this.ui.speedReadout.classList.toggle('hidden', gameMode !== 'bike');
     document.body.classList.add('is-playing');
     this.configureTouchControls();

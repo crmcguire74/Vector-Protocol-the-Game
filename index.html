@@ -133,19 +133,19 @@
           </fieldset>
 
           <section id="preset-picker" class="control-group preset-picker hidden" aria-labelledby="preset-heading">
-            <h3 id="preset-heading"><span>02</span> Room topology</h3>
+            <h3 id="preset-heading"><span>02</span> Boundary fallback <small>Used only when room bounds are unavailable</small></h3>
             <div class="preset-grid">
               <button class="preset-option is-selected" type="button" data-preset="portal" aria-pressed="true">
                 <span class="preset-glyph preset-glyph--portal" aria-hidden="true"></span>
-                <strong>Portal</strong><small>Single breach</small>
+                <strong>Small room</strong><small>5.6 × 6.5 m</small>
               </button>
               <button class="preset-option" type="button" data-preset="arena" aria-pressed="false">
                 <span class="preset-glyph preset-glyph--arena" aria-hidden="true"></span>
-                <strong>Arena</strong><small>Room shell</small>
+                <strong>Large room</strong><small>8.0 × 7.8 m</small>
               </button>
               <button class="preset-option" type="button" data-preset="tabletop" aria-pressed="false">
                 <span class="preset-glyph preset-glyph--tabletop" aria-hidden="true"></span>
-                <strong>Tabletop</strong><small>Scaled grid</small>
+                <strong>Compact room</strong><small>4.4 × 4.8 m</small>
               </button>
             </div>
           </section>
@@ -241,7 +241,7 @@
                 data-instruction-panel="disc-ar"
               >
                 <strong>Discs / AR</strong>
-                <p>Map a clear play space, choose a room topology, and place the breach on a detected surface. Trigger throws and grip guards. Disc impacts fracture the mapped room and expose the Grid beneath it.</p>
+                <p>Map a clear play space and place the breach on a detected surface. Vector Protocol automatically uses the headset’s bounded-floor polygon; the menu size is only a fallback. Trigger throws and grip guards. Disc impacts fracture your floor and walls, exposing the digital world through each opening.</p>
               </article>
               <article
                 id="instruction-lightcars-vr"

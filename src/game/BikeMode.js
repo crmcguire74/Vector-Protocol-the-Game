@@ -668,9 +668,8 @@ export class BikeMode {
       mapTexture.colorSpace = THREE.SRGBColorSpace;
       mapTexture.minFilter = THREE.LinearFilter;
       const mapGroup = new THREE.Group();
-      mapGroup.name = 'vr-cockpit-tactical-map';
-      mapGroup.position.set(0.5, -0.23, -0.83);
-      mapGroup.rotation.x = -0.08;
+      mapGroup.name = 'vr-fixed-upper-right-tactical-map';
+      mapGroup.position.set(0.69, 0.36, -0.92);
       const mapBack = new THREE.Mesh(
         new THREE.PlaneGeometry(0.245, 0.245),
         new THREE.MeshBasicMaterial({ color: 0x010609, transparent: true, opacity: 0.92 }),
@@ -687,7 +686,9 @@ export class BikeMode {
       mapFrame.rotation.z = Math.PI / 4;
       mapFrame.position.z = 0.008;
       mapGroup.add(mapBack, mapPanel, mapFrame);
-      cockpitBody.add(mapGroup);
+      // Keep navigation information head-locked instead of inheriting the
+      // motorcycle's roll. This remains readable while the chassis leans.
+      this.world.camera.add(mapGroup);
       tacticalMap = {
         canvas: mapCanvas,
         context: mapCanvas.getContext('2d'),
@@ -1464,6 +1465,20 @@ export class BikeMode {
             8,
             frameDt,
           );
+          if (cockpitData.instrumentRig) {
+            cockpitData.instrumentRig.rotation.z = THREE.MathUtils.damp(
+              cockpitData.instrumentRig.rotation.z,
+              -this.cockpit.rotation.z,
+              14,
+              frameDt,
+            );
+            cockpitData.instrumentRig.rotation.y = THREE.MathUtils.damp(
+              cockpitData.instrumentRig.rotation.y,
+              -this.cockpit.rotation.y,
+              14,
+              frameDt,
+            );
+          }
           this.cockpit.position.y = THREE.MathUtils.damp(this.cockpit.position.y, roadPulse, 13, frameDt);
           this.cockpit.position.z = THREE.MathUtils.damp(
             this.cockpit.position.z,
@@ -1740,6 +1755,7 @@ export class BikeMode {
         height: +this.dashboardHeight.toFixed(3),
         adjustment: +this.dashboardAdjustInput.toFixed(2),
         persistent: true,
+        panelsStayLevel: true,
       },
       steering: {
         source: this.steeringSource,
@@ -1749,7 +1765,9 @@ export class BikeMode {
         headLean: +this.headLean.toFixed(2),
         controllerLean: +this.controllerLean.toFixed(2),
       },
-      overheadMap: this.cockpit?.userData.tacticalMap ? 'upper_right_hud_and_vr_cockpit' : 'upper_right_hud',
+      overheadMap: this.cockpit?.userData.tacticalMap
+        ? 'head_locked_vr_upper_right'
+        : 'screen_locked_upper_right',
       player: {
         cellX: player.x,
         cellZ: player.z,
@@ -1784,7 +1802,12 @@ export class BikeMode {
   dispose() {
     if (this.cockpit) {
       this.cockpit.userData.readout?.texture?.dispose();
-      this.cockpit.userData.tacticalMap?.texture?.dispose();
+      const tacticalMap = this.cockpit.userData.tacticalMap;
+      tacticalMap?.texture?.dispose();
+      if (tacticalMap?.group) {
+        tacticalMap.group.removeFromParent();
+        disposeObject(tacticalMap.group);
+      }
       disposeObject(this.cockpit);
     }
     this.markerTextures.forEach((texture) => texture.dispose());

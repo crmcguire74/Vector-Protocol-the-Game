@@ -903,6 +903,23 @@
     border: 1px dashed rgb(88 242 255 / 19%);
   }
 
+  .preset-picker > h3 {
+    display: flex;
+    gap: 0.7rem;
+    align-items: baseline;
+  }
+
+  .preset-picker > h3 small {
+    overflow: hidden;
+    margin-left: auto;
+    color: #668087;
+    font: 500 0.43rem/1.2 var(--mono);
+    letter-spacing: 0.04em;
+    text-overflow: ellipsis;
+    text-transform: none;
+    white-space: nowrap;
+  }
+
   .preset-option {
     display: grid;
     min-height: 5rem;
