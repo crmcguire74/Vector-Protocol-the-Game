@@ -23,6 +23,7 @@ const DIRECTIONS = [
 ];
 
 const RIDER_COLORS = [COLORS.cyan, COLORS.coral, COLORS.amber, COLORS.violet];
+const ANALOG_MAX_TURN_RATE = 2.6; // rad/s at full lean or stick deflection
 const ARENA_HALF_METERS = 82;
 const AGGRESSION_GRACE_SECONDS = 8;
 const EMERGENCY_STOPS_PER_ROUND = 3;
@@ -132,6 +133,8 @@ export class BikeMode {
     this.occupancy = new Map();
     this.trails = [];
     this.trailSerial = 0;
+    this.debris = [];
+    this.crashFlashes = [];
     this.riders = [];
     this.bursts = [];
     this.shockwaves = [];
@@ -849,6 +852,15 @@ export class BikeMode {
       respawnTimer: 0,
       crashOwner: null,
     };
+    if (id === 0) {
+      // The player rides in continuous space: analog heading with arc turns.
+      // AI riders remain on the classic grid; both share cell occupancy.
+      rider.analog = true;
+      rider.fx = x;
+      rider.fz = z;
+      rider.heading = direction * Math.PI * 0.5;
+      rider.turnBurst = 0;
+    }
     this.riders.push(rider);
     this.occupancy.set(this.cellKey(x, z), { id: ++this.trailSerial, owner: id, live: true });
     return rider;
@@ -930,6 +942,113 @@ export class BikeMode {
     });
   }
 
+  // A cycle death is a full derezz event: voxel debris, a light flash,
+  // stacked shockwaves, an energy column, and heavy particles.
+  detonateCycle(impact, rider) {
+    const isPlayer = rider.id === 0;
+    this.bursts.push(createParticleBurst(this.root, impact, rider.color, isPlayer ? 70 : 52, 0.2));
+    this.bursts.push(createParticleBurst(this.root, impact, COLORS.ice, isPlayer ? 34 : 24, 0.12));
+    this.shockwaves.push(createShockwave(this.root, impact, rider.color, true));
+    this.shockwaves.push(
+      createShockwave(this.root, impact.clone().add(new THREE.Vector3(0, 0.6, 0)), COLORS.ice, true),
+    );
+
+    // Derezz voxels: the cycle shatters into glowing cubes that tumble out.
+    const voxelCount = isPlayer ? 34 : 26;
+    const voxelGeometry = new THREE.BoxGeometry(0.16, 0.16, 0.16);
+    for (let index = 0; index < voxelCount; index += 1) {
+      const material = new THREE.MeshBasicMaterial({
+        color: index % 4 === 0 ? COLORS.ice : rider.color,
+        transparent: true,
+        opacity: 1,
+        toneMapped: false,
+      });
+      const voxel = new THREE.Mesh(voxelGeometry, material);
+      voxel.position.copy(impact).add(
+        new THREE.Vector3(
+          (this.random() - 0.5) * 0.8,
+          this.random() * 0.9,
+          (this.random() - 0.5) * 0.8,
+        ),
+      );
+      const angle = this.random() * Math.PI * 2;
+      const force = 2.4 + this.random() * 6.5;
+      this.root.add(voxel);
+      this.debris.push({
+        mesh: voxel,
+        velocity: new THREE.Vector3(
+          Math.cos(angle) * force,
+          2.2 + this.random() * 5.4,
+          Math.sin(angle) * force,
+        ),
+        spin: new THREE.Vector3(this.random() * 9, this.random() * 9, this.random() * 9),
+        life: 0,
+        maxLife: 1.1 + this.random() * 0.9,
+      });
+    }
+
+    // Vertical energy column that stretches up and dissolves.
+    const column = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.28, 0.5, 1, 12, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: rider.color,
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    column.position.copy(impact);
+    this.root.add(column);
+
+    const flash = new THREE.PointLight(rider.color, 90, 26, 2);
+    flash.position.copy(impact).add(new THREE.Vector3(0, 1.1, 0));
+    this.root.add(flash);
+    this.crashFlashes.push({ light: flash, column, life: 0, maxLife: 0.85 });
+
+    this.world.pulseHaptics(1, isPlayer ? 300 : 160);
+    if (isPlayer) this.world.pulseVignette?.();
+  }
+
+  updateCrashEffects(dt) {
+    for (let index = this.debris.length - 1; index >= 0; index -= 1) {
+      const piece = this.debris[index];
+      piece.life += dt;
+      piece.velocity.y -= 12.5 * dt;
+      piece.mesh.position.addScaledVector(piece.velocity, dt);
+      if (piece.mesh.position.y < 0.08) {
+        piece.mesh.position.y = 0.08;
+        piece.velocity.y = Math.abs(piece.velocity.y) * 0.34;
+        piece.velocity.x *= 0.72;
+        piece.velocity.z *= 0.72;
+      }
+      piece.mesh.rotation.x += piece.spin.x * dt;
+      piece.mesh.rotation.y += piece.spin.y * dt;
+      piece.mesh.rotation.z += piece.spin.z * dt;
+      const fade = 1 - piece.life / piece.maxLife;
+      piece.mesh.material.opacity = Math.max(0, fade);
+      if (piece.life >= piece.maxLife) {
+        disposeObject(piece.mesh);
+        this.debris.splice(index, 1);
+      }
+    }
+    for (let index = this.crashFlashes.length - 1; index >= 0; index -= 1) {
+      const flash = this.crashFlashes[index];
+      flash.life += dt;
+      const remaining = Math.max(0, 1 - flash.life / flash.maxLife);
+      flash.light.intensity = 90 * remaining * remaining;
+      flash.column.scale.set(1 + (1 - remaining) * 0.8, 1 + (1 - remaining) * 9, 1 + (1 - remaining) * 0.8);
+      flash.column.material.opacity = 0.85 * remaining;
+      if (flash.life >= flash.maxLife) {
+        flash.light.removeFromParent();
+        disposeObject(flash.column);
+        this.crashFlashes.splice(index, 1);
+      }
+    }
+  }
+
   crashRider(rider, collisionOwner = null) {
     if (!rider.alive) return;
     rider.alive = false;
@@ -939,8 +1058,7 @@ export class BikeMode {
     const currentOccupancy = this.occupancy.get(currentKey);
     if (currentOccupancy?.live && currentOccupancy.owner === rider.id) this.occupancy.delete(currentKey);
     const impact = this.cellWorld(rider.x, rider.z).add(new THREE.Vector3(0, 0.5, 0));
-    this.bursts.push(createParticleBurst(this.root, impact, rider.color, rider.id === 0 ? 46 : 32, 0.16));
-    this.shockwaves.push(createShockwave(this.root, impact, rider.color, true));
+    this.detonateCycle(impact, rider);
     if (rider.id === 0) {
       rider.health -= 50;
       this.world.damageFeedback(50);
@@ -1013,6 +1131,12 @@ export class BikeMode {
     rider.direction = spawn.direction;
     rider.progress = 0;
     rider.queuedTurn = 0;
+    if (rider.analog) {
+      rider.fx = spawn.x;
+      rider.fz = spawn.z;
+      rider.heading = spawn.direction * Math.PI * 0.5;
+      rider.turnBurst = 0;
+    }
     rider.alive = true;
     rider.mesh.visible = this.isTabletopAR;
     rider.energy = Math.max(35, rider.energy);
@@ -1055,6 +1179,63 @@ export class BikeMode {
     }
     this.addTrail(rider, oldX, oldZ, newX, newZ);
     this.occupancy.set(this.cellKey(newX, newZ), { id: ++this.trailSerial, owner: rider.id, live: true });
+  }
+
+  // Continuous arc movement for the player. Lean or stick deflection turns
+  // the cycle proportionally: farther lean, sharper arc. Tap/keyboard turns
+  // still execute as fast 90-degree carves via a heading burst.
+  advancePlayerAnalog(rider, dt) {
+    if (!rider.alive) return;
+    if (rider.queuedTurn !== 0) {
+      rider.turnBurst += rider.queuedTurn * Math.PI * 0.5;
+      rider.queuedTurn = 0;
+    }
+    if (rider.turnBurst !== 0) {
+      const burstStep = Math.sign(rider.turnBurst) * Math.min(Math.abs(rider.turnBurst), 4.2 * dt);
+      rider.heading += burstStep;
+      rider.turnBurst -= burstStep;
+      if (Math.abs(rider.turnBurst) < 1e-4) rider.turnBurst = 0;
+    }
+    const steer = this.steeringInput;
+    if (steer !== 0) {
+      // Quadratic response: slight lean carves gently, deep lean cuts hard.
+      rider.heading += steer * Math.abs(steer) * ANALOG_MAX_TURN_RATE * dt;
+    }
+    const dirX = Math.sin(rider.heading);
+    const dirZ = -Math.cos(rider.heading);
+    rider.fx += dirX * rider.speed * dt;
+    rider.fz += dirZ * rider.speed * dt;
+    rider.direction = ((Math.round(rider.heading / (Math.PI * 0.5)) % 4) + 4) % 4;
+
+    // Look slightly ahead of the nose so walls kill on contact, not overlap.
+    const probeX = Math.round(rider.fx + dirX * 0.55);
+    const probeZ = Math.round(rider.fz + dirZ * 0.55);
+    const cellX = Math.round(rider.fx);
+    const cellZ = Math.round(rider.fz);
+    const probeIsNewCell = probeX !== rider.x || probeZ !== rider.z;
+    if (probeIsNewCell && this.isBlocked(probeX, probeZ)) {
+      const collision = this.occupancy.get(this.cellKey(probeX, probeZ));
+      this.crashRider(rider, collision?.owner ?? null);
+      return;
+    }
+    if (cellX === rider.x && cellZ === rider.z) return;
+    if (this.isBlocked(cellX, cellZ)) {
+      const collision = this.occupancy.get(this.cellKey(cellX, cellZ));
+      this.crashRider(rider, collision?.owner ?? null);
+      return;
+    }
+    const oldX = rider.x;
+    const oldZ = rider.z;
+    rider.x = cellX;
+    rider.z = cellZ;
+    rider.steps += 1;
+    if (!rider.trailOn) {
+      const oldKey = this.cellKey(oldX, oldZ);
+      const oldOccupancy = this.occupancy.get(oldKey);
+      if (oldOccupancy?.live && oldOccupancy.owner === rider.id) this.occupancy.delete(oldKey);
+    }
+    this.addTrail(rider, oldX, oldZ, cellX, cellZ);
+    this.occupancy.set(this.cellKey(cellX, cellZ), { id: ++this.trailSerial, owner: rider.id, live: true });
   }
 
   clearWithPulse() {
@@ -1313,7 +1494,8 @@ export class BikeMode {
     }
 
     // Large stick deflections are handled by DigiWorld's snap-turn queue. Smaller
-    // deflections blend with calibrated headset/handlebar lean for charged turns.
+    // deflections blend with calibrated headset/handlebar lean and steer the
+    // arc continuously: farther lean, sharper turn.
     const xrStick = Math.abs(xr.stickSteer) < 0.62 ? xr.stickSteer * 0.55 : 0;
     const components = [
       { source: 'head_lean', value: xr.headLean },
@@ -1345,31 +1527,17 @@ export class BikeMode {
           (best, component) => Math.abs(component.value) > Math.abs(best.value) ? component : best,
           { source: 'neutral', value: 0 },
         );
-        this.steeringSource = !this.analogTurnArmed
-          ? `latched_${dominant.source}`
-          : this.steeringIntentTime >= STEERING_INTENT_SECONDS
-            ? dominant.source
-            : `arming_${dominant.source}`;
-        if (this.analogTurnArmed && this.steeringIntentTime >= STEERING_INTENT_SECONDS) {
-          this.steerCharge += analogSteer * dt * (0.65 + Math.abs(analogSteer) * 2.4);
-        } else if (!this.analogTurnArmed) {
-          this.steerCharge = 0;
-        }
+        this.steeringSource = this.steeringIntentTime >= STEERING_INTENT_SECONDS
+          ? dominant.source
+          : `arming_${dominant.source}`;
+        // Continuous arc steering: sustained lean feeds the heading directly
+        // (see advancePlayerAnalog); no snap-turn charge is accumulated.
+        this.steerCharge = 0;
       } else {
         this.steeringIntentDirection = 0;
         this.steeringIntentTime = 0;
-        this.steerCharge = THREE.MathUtils.damp(this.steerCharge, 0, 10, dt);
-        if (Math.abs(this.steerCharge) < 0.005) this.steerCharge = 0;
-        this.steeringSource = 'neutral';
-      }
-      if (this.analogTurnArmed && this.steerCooldown <= 0 && Math.abs(this.steerCharge) >= 0.5) {
-        digitalTurn = this.steerCharge < 0 ? -1 : 1;
-        this.queuePlayerTurn(digitalTurn);
         this.steerCharge = 0;
-        this.steerCooldown = 0.22;
-        this.analogTurnArmed = false;
-        this.neutralRearmTime = 0;
-        this.world.pulseVignette();
+        this.steeringSource = 'neutral';
       }
     } else {
       this.steeringIntentDirection = 0;
@@ -1503,8 +1671,10 @@ export class BikeMode {
 
     for (const rider of this.riders) {
       if (!rider.alive) continue;
-      const point = toMap(rider.x, rider.z);
-      const vector = DIRECTIONS[rider.direction];
+      const point = rider.analog ? toMap(rider.fx, rider.fz) : toMap(rider.x, rider.z);
+      const vector = rider.analog
+        ? { x: Math.sin(rider.heading), z: -Math.cos(rider.heading) }
+        : DIRECTIONS[rider.direction];
       const cssColor = `#${new THREE.Color(rider.color).getHexString()}`;
       context.strokeStyle = cssColor;
       context.fillStyle = rider.id === 0 ? '#eaffff' : cssColor;
@@ -1530,8 +1700,12 @@ export class BikeMode {
 
   updateRiderVisual(rider, dt = 1 / 60) {
     const direction = DIRECTIONS[rider.direction];
-    const x = (rider.x + direction.x * rider.progress) * this.cellSize;
-    const z = (rider.z + direction.z * rider.progress) * this.cellSize;
+    const x = rider.analog
+      ? rider.fx * this.cellSize
+      : (rider.x + direction.x * rider.progress) * this.cellSize;
+    const z = rider.analog
+      ? rider.fz * this.cellSize
+      : (rider.z + direction.z * rider.progress) * this.cellSize;
     const frameDt = Math.min(dt, 0.05);
     const visual = rider.mesh.userData;
     const immersiveVR =
@@ -1539,7 +1713,7 @@ export class BikeMode {
       this.world.presentation === 'vr' &&
       this.world.renderer.xr.isPresenting;
     const speedRatio = THREE.MathUtils.clamp(rider.speed / 11.2, 0, 1);
-    const targetYaw = -rider.direction * Math.PI / 2;
+    const targetYaw = rider.analog ? -rider.heading : -rider.direction * Math.PI / 2;
     if (!Number.isFinite(visual.visualYaw)) visual.visualYaw = targetYaw;
 
     if (visual.lastDirection === null || visual.lastDirection === undefined) {
@@ -1833,17 +2007,22 @@ export class BikeMode {
 
     for (const rider of this.riders) {
       if (!rider.alive) continue;
-      rider.progress += dt * rider.speed;
-      let safety = 0;
-      while (rider.progress >= 1 && rider.alive && safety < 4) {
-        rider.progress -= 1;
-        this.stepRider(rider);
-        safety += 1;
+      if (rider.analog) {
+        this.advancePlayerAnalog(rider, dt);
+      } else {
+        rider.progress += dt * rider.speed;
+        let safety = 0;
+        while (rider.progress >= 1 && rider.alive && safety < 4) {
+          rider.progress -= 1;
+          this.stepRider(rider);
+          safety += 1;
+        }
       }
-      this.updateRiderVisual(rider, dt);
+      if (rider.alive) this.updateRiderVisual(rider, dt);
     }
 
     this.updateTrails(dt);
+    this.updateCrashEffects(dt);
     updateBursts(this.bursts, dt);
     updateShockwaves(this.shockwaves, dt, this.world.camera);
     updateEnvironment(this.environment, this.elapsed, dt);
@@ -1881,7 +2060,12 @@ export class BikeMode {
     });
     this.world.updateMinimap({
       bounds: this.bounds,
-      riders: this.riders.filter((rider) => rider.alive).map((rider) => ({ id: rider.id, x: rider.x, z: rider.z, color: rider.color })),
+      riders: this.riders.filter((rider) => rider.alive).map((rider) => ({
+        id: rider.id,
+        x: rider.analog ? rider.fx : rider.x,
+        z: rider.analog ? rider.fz : rider.z,
+        color: rider.color,
+      })),
       trails: this.trails.map((trail) => ({
         owner: trail.owner,
         color: RIDER_COLORS[trail.owner],
@@ -2031,6 +2215,13 @@ export class BikeMode {
     }
     this.markerTextures.forEach((texture) => texture.dispose());
     this.markerTextures.length = 0;
+    this.debris.forEach((piece) => disposeObject(piece.mesh));
+    this.debris.length = 0;
+    this.crashFlashes.forEach((flash) => {
+      flash.light.removeFromParent();
+      disposeObject(flash.column);
+    });
+    this.crashFlashes.length = 0;
     this.world.camera.far = this.previousCameraFar;
     this.world.camera.updateProjectionMatrix();
     if (this.world.scene.fog && this.previousFogDensity !== null) {

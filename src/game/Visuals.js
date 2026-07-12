@@ -1,8 +1,82 @@
 import * as THREE from 'three';
 
 const glowTextures = new Map();
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
 let cathedralTexture = null;
 let armorTexture = null;
+let skyGradientTexture = null;
+let cityWindowTexture = null;
+let cloudTexture = null;
+
+// Night-sky gradient for the grid-city horizon: near-black zenith falling
+// into a teal storm glow at the horizon line.
+export function getSkyGradientTexture() {
+  if (skyGradientTexture) return skyGradientTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = 4;
+  canvas.height = 256;
+  const context = canvas.getContext('2d');
+  const gradient = context.createLinearGradient(0, 0, 0, 256);
+  gradient.addColorStop(0, '#010208');
+  gradient.addColorStop(0.42, '#02060f');
+  gradient.addColorStop(0.66, '#04141d');
+  gradient.addColorStop(0.82, '#073039');
+  gradient.addColorStop(1, '#0a3f47');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 4, 256);
+  skyGradientTexture = new THREE.CanvasTexture(canvas);
+  skyGradientTexture.colorSpace = THREE.SRGBColorSpace;
+  return skyGradientTexture;
+}
+
+// Shared lit-window texture for the distant city skyline.
+export function getCityWindowTexture() {
+  if (cityWindowTexture) return cityWindowTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 128;
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#02070c';
+  context.fillRect(0, 0, 64, 128);
+  const random = seededRandom(4127);
+  const palette = ['#39f6ff', '#bffcff', '#7ecfe0', '#885cff'];
+  for (let row = 4; row < 124; row += 6) {
+    for (let column = 4; column < 60; column += 6) {
+      if (random() > 0.36) continue;
+      context.fillStyle = palette[Math.floor(random() * palette.length)];
+      context.globalAlpha = 0.35 + random() * 0.65;
+      context.fillRect(column, row, 3, 2);
+    }
+  }
+  context.globalAlpha = 1;
+  cityWindowTexture = new THREE.CanvasTexture(canvas);
+  cityWindowTexture.colorSpace = THREE.SRGBColorSpace;
+  return cityWindowTexture;
+}
+
+// Soft storm-cloud alpha blobs for the slow ceiling drift.
+export function getCloudTexture() {
+  if (cloudTexture) return cloudTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext('2d');
+  const random = seededRandom(7351);
+  for (let index = 0; index < 46; index += 1) {
+    const x = random() * 256;
+    const y = random() * 256;
+    const radius = 18 + random() * 44;
+    const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, 'rgba(255,255,255,0.34)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 256, 256);
+  }
+  cloudTexture = new THREE.CanvasTexture(canvas);
+  cloudTexture.wrapS = THREE.RepeatWrapping;
+  cloudTexture.wrapT = THREE.RepeatWrapping;
+  return cloudTexture;
+}
 
 export function getCathedralTexture() {
   if (cathedralTexture) return cathedralTexture;
@@ -82,6 +156,20 @@ export function createEnvironment({ ar = false } = {}) {
   root.name = 'digital-cathedral';
 
   if (!ar) {
+    // Night-storm sky behind everything else.
+    const sky = new THREE.Mesh(
+      new THREE.SphereGeometry(84, 32, 24),
+      new THREE.MeshBasicMaterial({
+        map: getSkyGradientTexture(),
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    sky.scale.y = 0.6;
+    sky.renderOrder = -3;
+    root.add(sky);
+
     const panorama = new THREE.Mesh(
       new THREE.SphereGeometry(69, 64, 32),
       new THREE.MeshBasicMaterial({
@@ -89,15 +177,80 @@ export function createEnvironment({ ar = false } = {}) {
         color: 0x607988,
         side: THREE.BackSide,
         transparent: true,
-        opacity: 0.36,
+        opacity: 0.24,
         depthWrite: false,
         fog: false,
       }),
     );
     panorama.scale.y = 0.64;
     panorama.rotation.y = Math.PI;
+    panorama.renderOrder = -2;
     panorama.name = 'photoreal-digital-cathedral';
     root.add(panorama);
+
+    // Distant grid-city skyline: one instanced draw call of lit towers.
+    const cityRandom = seededRandom(6203);
+    const buildingCount = 150;
+    const city = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ map: getCityWindowTexture(), fog: false }),
+      buildingCount,
+    );
+    city.name = 'grid-city-skyline';
+    const cityTransform = new THREE.Matrix4();
+    const cityQuaternion = new THREE.Quaternion();
+    const cityScale = new THREE.Vector3();
+    const cityPosition = new THREE.Vector3();
+    for (let index = 0; index < buildingCount; index += 1) {
+      const angle = (index / buildingCount) * Math.PI * 2 + cityRandom() * 0.09;
+      const radius = 47 + cityRandom() * 15;
+      const height = 3.5 + cityRandom() ** 2 * 23;
+      cityScale.set(1.6 + cityRandom() * 3.4, height, 1.6 + cityRandom() * 3.4);
+      cityPosition.set(Math.cos(angle) * radius, -9 + height * 0.5, Math.sin(angle) * radius);
+      cityQuaternion.setFromAxisAngle(UP_AXIS, cityRandom() * Math.PI);
+      cityTransform.compose(cityPosition, cityQuaternion, cityScale);
+      city.setMatrixAt(index, cityTransform);
+    }
+    city.instanceMatrix.needsUpdate = true;
+    root.add(city);
+
+    // Horizon energy glow rising behind the skyline.
+    const horizonGlow = new THREE.Mesh(
+      new THREE.CylinderGeometry(66, 66, 9, 48, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0x0f6a78,
+        transparent: true,
+        opacity: 0.34,
+        side: THREE.BackSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    horizonGlow.position.y = -6;
+    horizonGlow.renderOrder = -1;
+    root.add(horizonGlow);
+
+    // Slow-drifting storm-cloud deck overhead.
+    const clouds = new THREE.Mesh(
+      new THREE.PlaneGeometry(220, 220),
+      new THREE.MeshBasicMaterial({
+        color: 0x123037,
+        alphaMap: getCloudTexture(),
+        transparent: true,
+        opacity: 0.5,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    clouds.rotation.x = Math.PI / 2;
+    clouds.position.y = 36;
+    root.add(clouds);
+    root.userData.sky = sky;
+    root.userData.city = city;
+    root.userData.horizonGlow = horizonGlow;
+    root.userData.clouds = clouds;
 
     const dome = new THREE.Mesh(
       new THREE.IcosahedronGeometry(72, 2),
@@ -307,6 +460,12 @@ export function updateEnvironment(root, time, dt) {
     const flicker = Math.sin(time * beam.userData.rate + beam.userData.phase);
     beam.material.opacity = beam.userData.baseOpacity + Math.max(0, flicker) * 0.1;
   });
+  if (root.userData.clouds) {
+    root.userData.clouds.rotation.z += dt * 0.006;
+  }
+  if (root.userData.horizonGlow) {
+    root.userData.horizonGlow.material.opacity = 0.3 + Math.sin(time * 0.4) * 0.07;
+  }
 }
 
 export function createPlatform(radius, height = 0, accent = COLORS.cyan, seed = 0) {

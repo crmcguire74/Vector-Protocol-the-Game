@@ -24,6 +24,8 @@ import { createAnimatedSentinel, updateSentinelRig } from './SentinelAsset.js';
 const UP = new THREE.Vector3(0, 1, 0);
 const DISC_FORWARD = new THREE.Vector3(0, 0, 1);
 const DISC_RADIUS = 0.36;
+const CUSTOM_ROOM_STORAGE_KEY = 'vector-protocol.custom-room';
+const ROOM_TRACE_GRIP_HOLD_SECONDS = 2.2;
 
 export class ArenaMode {
   constructor(world, { roomPreset = 'portal' } = {}) {
@@ -61,6 +63,11 @@ export class ArenaMode {
     this.ricochetCount = 0;
     this.arRoom = null;
     this.arFootprint = null;
+    this.handSamples = [];
+    this.xrHandDisc = null;
+    this.roomTrace = { active: false, points: [], markers: null };
+    this.traceKeyLatch = false;
+    this.gripHoldTimer = 0;
 
     this.player = {
       position: new THREE.Vector3(0, 0, this.isARPresentation ? 1.5 : 11.5),
@@ -133,6 +140,18 @@ export class ArenaMode {
         this.arRoom.maxZ - Math.min(0.7, this.arRoom.depth * 0.18),
       );
       this.buildARRoomShell();
+      // Prefer a room the player already traced or a previously captured
+      // bounded floor over the preset boundaries. Live WebXR bounds that
+      // arrive during the session still override this.
+      if (this.applySavedCustomRoom()) {
+        this.player.position.set(
+          this.arRoom.centerX,
+          this.arRoom.floorY,
+          this.arRoom.maxZ - Math.min(0.7, this.arRoom.depth * 0.18),
+        );
+      } else {
+        this.world.announce('PRESET ROOM ACTIVE // HOLD GRIP OR PRESS R TO TRACE YOUR ROOM', 3);
+      }
     } else {
       this.arenaBounds = {
         minX: -17,
@@ -230,7 +249,7 @@ export class ArenaMode {
     };
   }
 
-  setBoundedFloorFootprint(footprint) {
+  setBoundedFloorFootprint(footprint, source = 'webxr-bounded-floor') {
     if (
       !this.isARPresentation ||
       !footprint?.vertices?.length ||
@@ -242,7 +261,7 @@ export class ArenaMode {
     const fallback = this.arRoom || this.getARRoomConfig();
     this.arRoom = {
       ...fallback,
-      source: 'webxr-bounded-floor',
+      source,
       vertices: footprint.vertices.map((vertex) => ({ x: vertex.x, y: vertex.y, z: vertex.z })),
       signedArea: footprint.signedArea,
       area: footprint.area,
@@ -307,8 +326,141 @@ export class ArenaMode {
       enemy.origin.copy(safe);
       enemy.navTarget.copy(safe);
     }
-    this.world.announce('BOUNDED PLAY SPACE LOCKED', 1.35);
+    this.world.announce(
+      source === 'saved-custom-room' ? 'SAVED ROOM RESTORED' : 'BOUNDED PLAY SPACE LOCKED',
+      1.35,
+    );
+    if (source !== 'saved-custom-room') this.saveCustomRoom(footprint, source);
     return true;
+  }
+
+  saveCustomRoom(footprint, source) {
+    try {
+      window.localStorage.setItem(
+        CUSTOM_ROOM_STORAGE_KEY,
+        JSON.stringify({ ...footprint, source, savedAt: Date.now() }),
+      );
+    } catch {
+      // Storage may be unavailable (private mode); the room still applies live.
+    }
+  }
+
+  loadCustomRoom() {
+    try {
+      const raw = window.localStorage.getItem(CUSTOM_ROOM_STORAGE_KEY);
+      if (!raw) return null;
+      const room = JSON.parse(raw);
+      if (!room?.vertices?.length || room.vertices.length < 3) return null;
+      return room;
+    } catch {
+      return null;
+    }
+  }
+
+  // Restore a previously saved custom room instead of the preset boundaries.
+  // A live WebXR bounded-floor arriving later still overrides it.
+  applySavedCustomRoom() {
+    if (!this.isARPresentation) return false;
+    const saved = this.loadCustomRoom();
+    if (!saved) return false;
+    return this.setBoundedFloorFootprint(saved, 'saved-custom-room');
+  }
+
+  startRoomTrace() {
+    if (!this.isARPresentation || this.roomTrace.active) return;
+    this.roomTrace.active = true;
+    this.roomTrace.points = [];
+    if (this.roomTrace.markers) disposeObject(this.roomTrace.markers);
+    this.roomTrace.markers = new THREE.Group();
+    this.roomTrace.markers.name = 'room-trace-markers';
+    this.root.add(this.roomTrace.markers);
+    this.world.announce('ROOM TRACE // AIM AT EACH FLOOR CORNER + TRIGGER · GRIP OR R TO FINISH', 3.2);
+  }
+
+  addRoomTraceCorner(ray) {
+    const localRay = this.localizeRay(ray);
+    const floorY = this.arRoom?.floorY ?? 0;
+    if (localRay.direction.y > -0.05) {
+      this.world.announce('AIM AT THE FLOOR TO MARK A CORNER', 1.1);
+      return;
+    }
+    const distance = (floorY - localRay.origin.y) / localRay.direction.y;
+    if (!Number.isFinite(distance) || distance <= 0 || distance > 12) return;
+    const point = localRay.origin.clone().addScaledVector(localRay.direction, distance);
+    this.roomTrace.points.push({ x: point.x, y: floorY, z: point.z });
+    const marker = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.09, 0.6, 10),
+      new THREE.MeshBasicMaterial({
+        color: COLORS.cyan,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    marker.position.set(point.x, floorY + 0.3, point.z);
+    this.roomTrace.markers.add(marker);
+    if (this.roomTrace.points.length > 1) {
+      const previous = this.roomTrace.points[this.roomTrace.points.length - 2];
+      const edge = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(previous.x, floorY + 0.03, previous.z),
+          new THREE.Vector3(point.x, floorY + 0.03, point.z),
+        ]),
+        new THREE.LineBasicMaterial({ color: COLORS.ice, transparent: true, opacity: 0.8, toneMapped: false }),
+      );
+      this.roomTrace.markers.add(edge);
+    }
+    this.world.announce(`CORNER ${this.roomTrace.points.length} SET`, 0.8);
+  }
+
+  finishRoomTrace(commit = true) {
+    if (!this.roomTrace.active) return;
+    const points = this.roomTrace.points;
+    this.roomTrace.active = false;
+    if (this.roomTrace.markers) {
+      disposeObject(this.roomTrace.markers);
+      this.roomTrace.markers = null;
+    }
+    if (!commit || points.length < 3) {
+      this.world.announce(points.length && commit ? 'ROOM TRACE NEEDS 3+ CORNERS // CANCELLED' : 'ROOM TRACE CANCELLED', 1.4);
+      return;
+    }
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    let signedArea = 0;
+    for (let index = 0; index < points.length; index += 1) {
+      const current = points[index];
+      const next = points[(index + 1) % points.length];
+      signedArea += current.x * next.z - next.x * current.z;
+      minX = Math.min(minX, current.x);
+      maxX = Math.max(maxX, current.x);
+      minZ = Math.min(minZ, current.z);
+      maxZ = Math.max(maxZ, current.z);
+    }
+    signedArea *= 0.5;
+    const footprint = {
+      vertices: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+      signedArea,
+      area: Math.abs(signedArea),
+      width: maxX - minX,
+      depth: maxZ - minZ,
+      centerX: (minX + maxX) * 0.5,
+      centerZ: (minZ + maxZ) * 0.5,
+      floorY: points[0].y,
+      minX,
+      maxX,
+      minZ,
+      maxZ,
+    };
+    if (!this.setBoundedFloorFootprint(footprint, 'player-traced-room')) {
+      this.world.announce('TRACED ROOM TOO SMALL // MIN 1.5m x 1.5m', 1.6);
+      return;
+    }
+    this.saveCustomRoom(footprint, 'player-traced-room');
   }
 
   roomContainsPoint(x, z, margin = 0) {
@@ -611,16 +763,68 @@ export class ArenaMode {
     return this.player.position.clone().add(new THREE.Vector3(0, 1.15, 0));
   }
 
-  primaryStart() {
+  primaryStart(ray) {
+    if (this.roomTrace.active) {
+      this.addRoomTraceCorner(ray || this.world.getAimRay());
+      return;
+    }
     if (this.player.discs <= 0 || this.charging) return;
     this.charging = true;
     this.charge = 0;
+    this.handSamples = [];
+    const controller = this.world.activeThrowController;
+    if (controller && this.world.renderer.xr.isPresenting) {
+      if (!this.xrHandDisc) {
+        this.xrHandDisc = createDisc(COLORS.cyan, false);
+        this.xrHandDisc.name = 'xr-held-frisbee-disc';
+        this.xrHandDisc.scale.setScalar(0.24);
+      }
+      this.xrHandDisc.position.set(0, -0.015, -0.085);
+      this.xrHandDisc.rotation.set(-0.35, 0, 0);
+      controller.add(this.xrHandDisc);
+      this.xrHandDisc.visible = true;
+    }
+  }
+
+  releaseHeldDisc() {
+    if (this.xrHandDisc) {
+      this.xrHandDisc.visible = false;
+      this.xrHandDisc.removeFromParent();
+    }
+    this.handSamples = [];
+  }
+
+  // Derive a frisbee release from the controller's recent world motion.
+  // Returns { direction, speed, origin } in arena-local space, or null when
+  // the hand was too slow for a deliberate throw (caller falls back to aim).
+  computeHandThrow() {
+    const samples = this.handSamples;
+    if (!samples || samples.length < 2) return null;
+    const latest = samples[samples.length - 1];
+    let oldest = samples[0];
+    for (const sample of samples) {
+      if (latest.t - sample.t <= 0.13) {
+        oldest = sample;
+        break;
+      }
+    }
+    const span = latest.t - oldest.t;
+    if (span < 0.03) return null;
+    this.root.updateWorldMatrix(true, false);
+    const from = this.root.worldToLocal(oldest.position.clone());
+    const to = this.root.worldToLocal(latest.position.clone());
+    const velocity = to.clone().sub(from).divideScalar(span);
+    const speed = velocity.length();
+    if (speed < 1.3) return null;
+    return { direction: velocity.normalize(), speed, origin: to };
   }
 
   primaryEnd(ray) {
     if (!this.charging) return;
-    this.throwDisc(ray || this.world.getAimRay());
+    const handThrow = this.computeHandThrow();
+    this.throwDisc(ray || this.world.getAimRay(), handThrow);
     this.charging = false;
+    this.releaseHeldDisc();
   }
 
   localizeRay(ray) {
@@ -632,6 +836,10 @@ export class ArenaMode {
   }
 
   setShield(active) {
+    if (this.roomTrace.active && active) {
+      this.finishRoomTrace(true);
+      return;
+    }
     this.shielding = active;
   }
 
@@ -639,13 +847,32 @@ export class ArenaMode {
     this.charging = false;
     this.charge = 0;
     this.shielding = false;
+    this.releaseHeldDisc();
   }
 
-  throwDisc(ray) {
+  throwDisc(ray, handThrow = null) {
     if (this.player.discs <= 0) return;
     const localRay = this.localizeRay(ray);
-    const origin = localRay.origin.clone().addScaledVector(localRay.direction, 0.5);
-    const speed = 14 + Math.min(1, this.charge) * 8;
+    let origin;
+    let speed;
+    if (handThrow) {
+      // Frisbee release: the disc leaves the hand along the swing, gently
+      // blended toward where the controller points and flattened so it
+      // flies like a disc instead of a lob.
+      const direction = handThrow.direction
+        .clone()
+        .multiplyScalar(0.72)
+        .addScaledVector(localRay.direction, 0.28);
+      direction.y = THREE.MathUtils.clamp(direction.y, -0.3, 0.35);
+      direction.normalize();
+      localRay.direction.copy(direction);
+      origin = handThrow.origin.clone().addScaledVector(direction, 0.35);
+      speed = THREE.MathUtils.clamp(handThrow.speed * 2.1, 13, 30);
+      this.charge = THREE.MathUtils.clamp((speed - 13) / 17, 0, 1);
+    } else {
+      origin = localRay.origin.clone().addScaledVector(localRay.direction, 0.5);
+      speed = 14 + Math.min(1, this.charge) * 8;
+    }
     const mesh = createDisc(COLORS.cyan, false);
     mesh.position.copy(origin);
     this.root.add(mesh);
@@ -1401,7 +1628,37 @@ export class ArenaMode {
   update(dt) {
     this.elapsed += dt;
     if (this.world.phase !== 'running') return;
+    if (this.isARPresentation) {
+      // R toggles room tracing (desktop AR preview); toggling off commits.
+      const traceKey = this.world.input.isDown('KeyR');
+      if (traceKey && !this.traceKeyLatch) {
+        if (this.roomTrace.active) this.finishRoomTrace(true);
+        else this.startRoomTrace();
+      }
+      this.traceKeyLatch = traceKey;
+      // In-headset entry: hold grip while the preset room is active.
+      const presetRoom = !this.arRoom?.vertices?.length;
+      if (this.shielding && presetRoom && !this.roomTrace.active) {
+        this.gripHoldTimer += dt;
+        if (this.gripHoldTimer >= ROOM_TRACE_GRIP_HOLD_SECONDS) {
+          this.gripHoldTimer = 0;
+          this.shielding = false;
+          this.startRoomTrace();
+        }
+      } else if (!this.shielding) {
+        this.gripHoldTimer = 0;
+      }
+    }
     if (this.charging) this.charge = Math.min(1, this.charge + dt * 1.1);
+    if (this.charging && this.world.activeThrowController && this.world.renderer.xr.isPresenting) {
+      const position = new THREE.Vector3();
+      this.world.activeThrowController.getWorldPosition(position);
+      this.handSamples.push({ position, t: this.elapsed });
+      while (this.handSamples.length > 12) this.handSamples.shift();
+    }
+    if (this.xrHandDisc?.visible) {
+      this.xrHandDisc.rotation.z += dt * 6;
+    }
     if (this.handDisc) {
       this.handDisc.visible = this.player.discs > 0;
       const heldScale = 0.23 + (this.charging ? this.charge * 0.055 : Math.sin(this.elapsed * 3.2) * 0.006);
@@ -1611,6 +1868,11 @@ export class ArenaMode {
       }
     });
     if (this.handDisc) disposeObject(this.handDisc);
+    if (this.xrHandDisc) {
+      this.xrHandDisc.removeFromParent();
+      disposeObject(this.xrHandDisc);
+    }
+    if (this.roomTrace.markers) disposeObject(this.roomTrace.markers);
     disposeObject(this.root);
   }
 }

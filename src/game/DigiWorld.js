@@ -355,11 +355,13 @@ export class DigiWorld {
           } else {
             controller.userData.screenSteer = false;
             this.xrPrimaryHeld = true;
+            this.activeThrowController = controller;
             this.currentMode.primaryStart(ray);
           }
           return;
         }
         this.xrPrimaryHeld = true;
+        this.activeThrowController = controller;
         if (this.phase === 'running') this.currentMode?.primaryStart(this.getAimRay(controller));
       });
       controller.addEventListener('selectend', () => {
@@ -370,6 +372,7 @@ export class DigiWorld {
         }
         this.xrPrimaryHeld = false;
         if (this.phase === 'running') this.currentMode?.primaryEnd(this.getAimRay(controller));
+        if (this.activeThrowController === controller) this.activeThrowController = null;
       });
       controller.addEventListener('squeezestart', () => {
         if (this.phase === 'paused' || this.phase === 'result') {
