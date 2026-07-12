@@ -31,6 +31,12 @@ const DASHBOARD_STORAGE_KEY = 'vector-protocol:lightcar-dashboard-height';
 const LEGACY_DASHBOARD_STORAGE_KEY = 'digi-world:lightline-dashboard-height';
 const DASHBOARD_MIN = -0.28;
 const DASHBOARD_MAX = 0.38;
+const HEAD_LEAN_ENTER_METERS = 0.065;
+const HEAD_LEAN_EXIT_METERS = 0.035;
+const CONTROLLER_LEAN_ENTER_METERS = 0.055;
+const CONTROLLER_LEAN_EXIT_METERS = 0.03;
+const STEERING_INTENT_SECONDS = 0.1;
+const ANALOG_REARM_SECONDS = 0.12;
 
 function applyDeadzone(value, threshold = 0.16) {
   const magnitude = Math.abs(value || 0);
@@ -152,6 +158,17 @@ export class BikeMode {
     this.leanCenterX = null;
     this.controllerLeanCenter = null;
     this.leanCalibrated = false;
+    this.headOffsetMeters = 0;
+    this.controllerOffsetMeters = 0;
+    this.smoothedHeadOffset = 0;
+    this.smoothedControllerOffset = 0;
+    this.headLeanActive = false;
+    this.controllerLeanActive = false;
+    this.steeringIntentDirection = 0;
+    this.steeringIntentTime = 0;
+    this.steeringNeutral = true;
+    this.analogTurnArmed = true;
+    this.neutralRearmTime = 0;
     this.standardPadEmergencyDown = false;
     this.standardPadSteer = 0;
     this.controllerTriggerBoost = false;
@@ -1121,7 +1138,7 @@ export class BikeMode {
     return snapshot;
   }
 
-  readXRMechanics() {
+  readXRMechanics(dt = 1 / 60) {
     const snapshot = {
       active: false,
       triggerBoost: false,
@@ -1138,6 +1155,12 @@ export class BikeMode {
       this.leanCalibrated = false;
       this.headLean = 0;
       this.controllerLean = 0;
+      this.headOffsetMeters = 0;
+      this.controllerOffsetMeters = 0;
+      this.smoothedHeadOffset = 0;
+      this.smoothedControllerOffset = 0;
+      this.headLeanActive = false;
+      this.controllerLeanActive = false;
       return snapshot;
     }
     snapshot.active = true;
@@ -1156,7 +1179,7 @@ export class BikeMode {
       const x = axes.at(-2) || 0;
       const y = axes.at(-1) || 0;
       if (hand === 'left') {
-        snapshot.stickSteer = applyDeadzone(x, 0.16);
+        snapshot.stickSteer = applyDeadzone(x, 0.2);
         snapshot.brake ||= y > 0.58;
       } else {
         snapshot.dashboardAdjust = applyDeadzone(-y, 0.24);
@@ -1168,10 +1191,27 @@ export class BikeMode {
     xrCamera.updateWorldMatrix(true, false);
     const headLocal = this.world.cameraRig.worldToLocal(xrCamera.getWorldPosition(new THREE.Vector3()));
     if (this.leanCenterX === null) this.leanCenterX = headLocal.x;
-    snapshot.headLean = applyDeadzone(
-      THREE.MathUtils.clamp((headLocal.x - this.leanCenterX) / 0.3, -1, 1),
-      0.08,
-    );
+    const rawHeadOffset = headLocal.x - this.leanCenterX;
+    this.smoothedHeadOffset = THREE.MathUtils.damp(this.smoothedHeadOffset, rawHeadOffset, 12, dt);
+    this.headOffsetMeters = rawHeadOffset;
+    if (this.headLeanActive) {
+      if (Math.abs(this.smoothedHeadOffset) < HEAD_LEAN_EXIT_METERS) this.headLeanActive = false;
+    } else if (Math.abs(this.smoothedHeadOffset) > HEAD_LEAN_ENTER_METERS) {
+      this.headLeanActive = true;
+    }
+    if (!this.headLeanActive && Math.abs(rawHeadOffset) < HEAD_LEAN_EXIT_METERS) {
+      // Track slow posture drift only while clearly neutral. Intentional leans
+      // remain measured from the calibrated center instead of being cancelled.
+      this.leanCenterX = THREE.MathUtils.damp(this.leanCenterX, headLocal.x, 0.7, dt);
+    }
+    snapshot.headLean = this.headLeanActive
+      ? THREE.MathUtils.clamp(
+          Math.sign(this.smoothedHeadOffset) *
+            ((Math.abs(this.smoothedHeadOffset) - HEAD_LEAN_EXIT_METERS) / (0.22 - HEAD_LEAN_EXIT_METERS)),
+          -1,
+          1,
+        )
+      : 0;
     this.leanCalibrated = true;
 
     if (handed.left && handed.right) {
@@ -1183,16 +1223,57 @@ export class BikeMode {
       );
       const heightDifference = rightLocal.y - leftLocal.y;
       if (this.controllerLeanCenter === null) this.controllerLeanCenter = heightDifference;
+      const rawControllerOffset = heightDifference - this.controllerLeanCenter;
+      this.controllerOffsetMeters = rawControllerOffset;
+      this.smoothedControllerOffset = THREE.MathUtils.damp(
+        this.smoothedControllerOffset,
+        rawControllerOffset,
+        14,
+        dt,
+      );
       const bothGripsHeld =
         Boolean(handed.left.gamepad.buttons[1]?.pressed) &&
         Boolean(handed.right.gamepad.buttons[1]?.pressed);
       if (bothGripsHeld) {
-        snapshot.controllerLean = THREE.MathUtils.clamp(
-          -((heightDifference - this.controllerLeanCenter) / 0.3) * 0.45,
-          -1,
-          1,
+        if (this.controllerLeanActive) {
+          if (Math.abs(this.smoothedControllerOffset) < CONTROLLER_LEAN_EXIT_METERS) {
+            this.controllerLeanActive = false;
+          }
+        } else if (Math.abs(this.smoothedControllerOffset) > CONTROLLER_LEAN_ENTER_METERS) {
+          this.controllerLeanActive = true;
+        }
+        if (!this.controllerLeanActive && Math.abs(rawControllerOffset) < CONTROLLER_LEAN_EXIT_METERS) {
+          this.controllerLeanCenter = THREE.MathUtils.damp(
+            this.controllerLeanCenter,
+            heightDifference,
+            0.8,
+            dt,
+          );
+        }
+        snapshot.controllerLean = this.controllerLeanActive
+          ? THREE.MathUtils.clamp(
+              -Math.sign(this.smoothedControllerOffset) *
+                ((Math.abs(this.smoothedControllerOffset) - CONTROLLER_LEAN_EXIT_METERS) /
+                  (0.18 - CONTROLLER_LEAN_EXIT_METERS)) *
+                0.72,
+              -1,
+              1,
+            )
+          : 0;
+      } else {
+        this.controllerLeanActive = false;
+        this.smoothedControllerOffset = THREE.MathUtils.damp(this.smoothedControllerOffset, 0, 12, dt);
+        this.controllerLeanCenter = THREE.MathUtils.damp(
+          this.controllerLeanCenter,
+          heightDifference,
+          3,
+          dt,
         );
       }
+    } else {
+      this.controllerOffsetMeters = 0;
+      this.smoothedControllerOffset = 0;
+      this.controllerLeanActive = false;
     }
     this.headLean = snapshot.headLean;
     this.controllerLean = snapshot.controllerLean;
@@ -1223,30 +1304,64 @@ export class BikeMode {
       -1,
       1,
     );
+    const analogIntent = Math.abs(analogSteer) >= 0.08;
+    if (analogIntent) {
+      this.neutralRearmTime = 0;
+    } else {
+      this.neutralRearmTime = Math.min(ANALOG_REARM_SECONDS, this.neutralRearmTime + dt);
+      if (this.neutralRearmTime >= ANALOG_REARM_SECONDS) this.analogTurnArmed = true;
+    }
     if (!digitalTurn) {
-      if (Math.abs(analogSteer) > 0.045) {
-        this.steerCharge += analogSteer * dt * (0.65 + Math.abs(analogSteer) * 2.4);
-        const dominant = components.sort((a, b) => Math.abs(b.value) - Math.abs(a.value))[0];
-        this.steeringSource = dominant?.source || 'neutral';
+      if (analogIntent) {
+        const intentDirection = Math.sign(analogSteer);
+        if (intentDirection !== this.steeringIntentDirection) {
+          this.steeringIntentDirection = intentDirection;
+          this.steeringIntentTime = 0;
+        }
+        this.steeringIntentTime += dt;
+        const dominant = components.reduce(
+          (best, component) => Math.abs(component.value) > Math.abs(best.value) ? component : best,
+          { source: 'neutral', value: 0 },
+        );
+        this.steeringSource = !this.analogTurnArmed
+          ? `latched_${dominant.source}`
+          : this.steeringIntentTime >= STEERING_INTENT_SECONDS
+            ? dominant.source
+            : `arming_${dominant.source}`;
+        if (this.analogTurnArmed && this.steeringIntentTime >= STEERING_INTENT_SECONDS) {
+          this.steerCharge += analogSteer * dt * (0.65 + Math.abs(analogSteer) * 2.4);
+        } else if (!this.analogTurnArmed) {
+          this.steerCharge = 0;
+        }
       } else {
-        this.steerCharge = THREE.MathUtils.damp(this.steerCharge, 0, 5, dt);
+        this.steeringIntentDirection = 0;
+        this.steeringIntentTime = 0;
+        this.steerCharge = THREE.MathUtils.damp(this.steerCharge, 0, 10, dt);
+        if (Math.abs(this.steerCharge) < 0.005) this.steerCharge = 0;
         this.steeringSource = 'neutral';
       }
-      if (this.steerCooldown <= 0 && Math.abs(this.steerCharge) >= 0.5) {
+      if (this.analogTurnArmed && this.steerCooldown <= 0 && Math.abs(this.steerCharge) >= 0.5) {
         digitalTurn = this.steerCharge < 0 ? -1 : 1;
         this.queuePlayerTurn(digitalTurn);
         this.steerCharge = 0;
         this.steerCooldown = 0.22;
+        this.analogTurnArmed = false;
+        this.neutralRearmTime = 0;
         this.world.pulseVignette();
       }
+    } else {
+      this.steeringIntentDirection = 0;
+      this.steeringIntentTime = 0;
     }
-    const steeringTarget = digitalTurn || analogSteer;
+    this.steeringNeutral = !digitalTurn && !analogIntent;
+    const steeringTarget = digitalTurn || (this.steeringIntentTime >= STEERING_INTENT_SECONDS ? analogSteer : 0);
     this.steeringInput = THREE.MathUtils.damp(
       this.steeringInput,
       steeringTarget,
-      Math.abs(steeringTarget) > 0.02 ? 11 : 5,
+      Math.abs(steeringTarget) > 0.02 ? 11 : 12,
       dt,
     );
+    if (this.steeringNeutral && Math.abs(this.steeringInput) < 0.008) this.steeringInput = 0;
   }
 
   updateDashboardHeight(dt, analogAdjust = 0) {
@@ -1368,6 +1483,10 @@ export class BikeMode {
     const z = (rider.z + direction.z * rider.progress) * this.cellSize;
     const frameDt = Math.min(dt, 0.05);
     const visual = rider.mesh.userData;
+    const immersiveVR =
+      rider.id === 0 &&
+      this.world.presentation === 'vr' &&
+      this.world.renderer.xr.isPresenting;
     const speedRatio = THREE.MathUtils.clamp(rider.speed / 11.2, 0, 1);
     const targetYaw = -rider.direction * Math.PI / 2;
     if (!Number.isFinite(visual.visualYaw)) visual.visualYaw = targetYaw;
@@ -1379,9 +1498,10 @@ export class BikeMode {
       visual.turnImpulse = directionDelta === 1 ? 1 : directionDelta === 3 ? -1 : 0;
       visual.lastDirection = rider.direction;
     }
+    const stablePlayerSteer = Math.abs(this.steeringInput) >= 0.015 ? this.steeringInput : 0;
     const steerSignal = THREE.MathUtils.clamp(
       rider.id === 0
-        ? this.steeringInput || rider.queuedTurn || visual.turnImpulse || 0
+        ? stablePlayerSteer || rider.queuedTurn || visual.turnImpulse || 0
         : rider.queuedTurn || visual.turnImpulse || 0,
       -1,
       1,
@@ -1447,12 +1567,15 @@ export class BikeMode {
 
     if (rider.id === 0) {
       if (!this.isTabletopAR) {
-        const position = new THREE.Vector3(x, 0.08 + Math.sin(this.elapsed * 18) * 0.012, z);
+        // Head tracking supplies all ride motion in VR. Adding a synthetic
+        // suspension wave to the camera rig makes a straight run feel unstable.
+        const rideHeight = immersiveVR ? 0.08 : 0.08 + Math.sin(this.elapsed * 18) * 0.012;
+        const position = new THREE.Vector3(x, rideHeight, z);
         this.world.setPlayerPosition(position);
         this.world.setYaw(visual.visualYaw);
         if (this.cockpit) {
           const cockpitData = this.cockpit.userData;
-          const roadPulse = Math.sin(suspensionPhase) * (0.002 + speedRatio * 0.006);
+          const roadPulse = immersiveVR ? 0 : Math.sin(suspensionPhase) * (0.002 + speedRatio * 0.006);
           this.cockpit.rotation.z = THREE.MathUtils.damp(
             this.cockpit.rotation.z,
             -steerSignal * 0.065,
@@ -1465,6 +1588,10 @@ export class BikeMode {
             8,
             frameDt,
           );
+          if (this.steeringNeutral) {
+            if (Math.abs(this.cockpit.rotation.z) < 0.0005) this.cockpit.rotation.z = 0;
+            if (Math.abs(this.cockpit.rotation.y) < 0.0005) this.cockpit.rotation.y = 0;
+          }
           if (cockpitData.instrumentRig) {
             cockpitData.instrumentRig.rotation.z = THREE.MathUtils.damp(
               cockpitData.instrumentRig.rotation.z,
@@ -1553,8 +1680,8 @@ export class BikeMode {
           }
         }
         this.world.setCameraBob(
-          Math.sin(this.elapsed * 8.5) * 0.012,
-          Math.abs(Math.sin(this.elapsed * 17)) * 0.012,
+          0,
+          Math.abs(Math.sin(this.elapsed * 17)) * 0.006,
           0,
         );
       }
@@ -1577,7 +1704,7 @@ export class BikeMode {
     const player = this.riders[0];
 
     const gamepad = this.readStandardGamepad();
-    const xr = this.readXRMechanics();
+    const xr = this.readXRMechanics(dt);
     const leftPressed = this.world.input.consumePress('KeyA') || this.world.input.consumePress('ArrowLeft');
     const rightPressed = this.world.input.consumePress('KeyD') || this.world.input.consumePress('ArrowRight');
     const keyboardTurn = leftPressed === rightPressed ? 0 : leftPressed ? -1 : 1;
@@ -1712,6 +1839,15 @@ export class BikeMode {
     this.standardPadEmergencyDown = false;
     this.steeringInput = 0;
     this.steerCharge = 0;
+    this.steeringIntentDirection = 0;
+    this.steeringIntentTime = 0;
+    this.steeringNeutral = true;
+    this.analogTurnArmed = true;
+    this.neutralRearmTime = 0;
+    this.headLeanActive = false;
+    this.controllerLeanActive = false;
+    this.smoothedHeadOffset = 0;
+    this.smoothedControllerOffset = 0;
     this.controllerTriggerBoost = false;
     this.boosting = false;
     this.braking = false;
@@ -1761,9 +1897,19 @@ export class BikeMode {
         source: this.steeringSource,
         input: +this.steeringInput.toFixed(2),
         charge: +this.steerCharge.toFixed(2),
+        neutral: this.steeringNeutral,
+        intentSeconds: +this.steeringIntentTime.toFixed(2),
+        turnArmed: this.analogTurnArmed,
+        neutralRearmSeconds: +this.neutralRearmTime.toFixed(2),
         vrLeanCalibrated: this.leanCalibrated,
         headLean: +this.headLean.toFixed(2),
         controllerLean: +this.controllerLean.toFixed(2),
+        headOffsetMeters: +this.headOffsetMeters.toFixed(3),
+        controllerOffsetMeters: +this.controllerOffsetMeters.toFixed(3),
+        headLeanActive: this.headLeanActive,
+        controllerLeanActive: this.controllerLeanActive,
+        cockpitRollDegrees: +THREE.MathUtils.radToDeg(this.cockpit?.rotation.z || 0).toFixed(2),
+        syntheticLateralBobMeters: 0,
       },
       overheadMap: this.cockpit?.userData.tacticalMap
         ? 'head_locked_vr_upper_right'

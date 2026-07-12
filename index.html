@@ -241,7 +241,7 @@
                 data-instruction-panel="disc-ar"
               >
                 <strong>Discs / AR</strong>
-                <p>Map a clear play space and place the breach on a detected surface. Vector Protocol automatically uses the headset’s bounded-floor polygon; the menu size is only a fallback. Trigger throws and grip guards. Disc impacts fracture your floor and walls, exposing the digital world through each opening.</p>
+                <p>Choose a fallback room size only if your device has no boundary, then launch and aim the cyan marker at the floor. Press the trigger or Confirm Floor; walls and steep surfaces are rejected and combat stays frozen until placement is confirmed. Trigger throws and grip guards. Impacts open persistent animated neon tunnels through your floor and walls.</p>
               </article>
               <article
                 id="instruction-lightcars-vr"
@@ -374,6 +374,13 @@
           <button id="menu-button" type="button"><span>Main menu</span><i aria-hidden="true">⌂</i></button>
         </div>
       </div>
+    </section>
+
+    <section id="ar-placement-panel" class="hidden" role="status" aria-live="polite">
+      <p>Room placement</p>
+      <strong id="ar-placement-status">Scan the floor</strong>
+      <small id="ar-placement-detail">Move your device until the floor marker appears.</small>
+      <button id="ar-place-button" type="button" disabled>Confirm floor</button>
     </section>
 
     <button id="xr-exit" class="hidden" type="button" aria-label="Exit immersive mode">

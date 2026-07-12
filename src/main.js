@@ -37,6 +37,10 @@ const ui = {
   resultDetail: byId('result-detail'),
   againButton: byId('again-button'),
   menuButton: byId('menu-button'),
+  arPlacementPanel: byId('ar-placement-panel'),
+  arPlacementStatus: byId('ar-placement-status'),
+  arPlacementDetail: byId('ar-placement-detail'),
+  arPlaceButton: byId('ar-place-button'),
   xrExit: byId('xr-exit'),
   touchControls: byId('touch-controls'),
   touchLeft: byId('touch-left'),
@@ -169,6 +173,7 @@ try {
   ui.exitButton.addEventListener('click', () => world.goToMenu());
   ui.againButton.addEventListener('click', () => world.restart());
   ui.menuButton.addEventListener('click', () => world.goToMenu());
+  ui.arPlaceButton.addEventListener('click', () => world.queueARPlacementConfirmation());
   ui.xrExit.addEventListener('click', () => world.xrSession?.end());
   document.addEventListener('visibilitychange', () => world.handleVisibility(document.hidden));
 

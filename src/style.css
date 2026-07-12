@@ -1860,6 +1860,60 @@
 
   #xr-exit:hover { background: var(--cyan-hot); color: var(--void); }
 
+  #ar-placement-panel {
+    position: fixed;
+    z-index: 110;
+    top: max(1rem, env(safe-area-inset-top));
+    left: 50%;
+    width: min(32rem, calc(100vw - 2rem));
+    padding: 1rem 1.1rem;
+    transform: translateX(-50%);
+    background: linear-gradient(145deg, rgb(2 10 16 / 94%), rgb(5 20 28 / 88%));
+    border: 1px solid rgb(88 242 255 / 52%);
+    box-shadow: 0 1rem 4rem rgb(0 0 0 / 55%), inset 0 0 2rem rgb(88 242 255 / 5%);
+    color: var(--white);
+    font-family: var(--mono);
+    text-align: center;
+    backdrop-filter: blur(1rem);
+  }
+
+  #ar-placement-panel p {
+    margin-bottom: 0.45rem;
+    color: var(--cyan);
+    font-size: 0.48rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+
+  #ar-placement-status {
+    display: block;
+    font: 600 0.9rem/1.2 var(--display);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  #ar-placement-detail {
+    display: block;
+    margin: 0.5rem auto 0.8rem;
+    color: #91aeb5;
+    font-size: 0.54rem;
+    line-height: 1.5;
+  }
+
+  #ar-place-button {
+    min-height: 2.7rem;
+    padding: 0.7rem 1.15rem;
+    background: rgb(16 67 76 / 35%);
+    border: 1px solid var(--cyan);
+    color: var(--cyan-hot);
+    font: 700 0.6rem/1 var(--display);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  #ar-place-button:disabled { opacity: 0.34; cursor: not-allowed; }
+  #ar-place-button:not(:disabled):hover { background: var(--cyan-hot); color: var(--void); }
+
   #touch-controls {
     position: fixed;
     z-index: 90;

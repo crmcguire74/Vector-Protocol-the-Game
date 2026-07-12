@@ -12,11 +12,11 @@ import {
   createRoomFootprint,
   createShockwave,
   disposeObject,
-  getCathedralTexture,
   seededRandom,
   updateBursts,
   updateDiscTrail,
   updateEnvironment,
+  updateRealityBreach,
   updateShockwaves,
 } from './Visuals.js';
 import { createAnimatedSentinel, updateSentinelRig } from './SentinelAsset.js';
@@ -286,8 +286,6 @@ export class ArenaMode {
     this.root.add(this.arFootprint);
 
     if (this.arShell) disposeObject(this.arShell);
-    this.portalTexture?.dispose();
-    this.portalTexture = null;
     this.arPanels.length = 0;
     this.buildARRoomShell();
 
@@ -398,62 +396,6 @@ export class ArenaMode {
     const totalWidth = config.columns * config.width;
     const totalHeight = config.rows * config.height;
 
-    const portalCanvas = document.createElement('canvas');
-    portalCanvas.width = 512;
-    portalCanvas.height = 512;
-    const context = portalCanvas.getContext('2d');
-    const gradient = context.createRadialGradient(256, 256, 12, 256, 256, 360);
-    gradient.addColorStop(0, '#4af9ff');
-    gradient.addColorStop(0.22, '#123e66');
-    gradient.addColorStop(0.68, '#090d29');
-    gradient.addColorStop(1, '#02040a');
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, 512, 512);
-    context.strokeStyle = '#45efff88';
-    context.lineWidth = 2;
-    for (let i = 0; i <= 16; i += 1) {
-      const v = (i / 16) * 512;
-      context.beginPath();
-      context.moveTo(v, 0);
-      context.lineTo(256 + (v - 256) * 0.15, 256);
-      context.stroke();
-      context.beginPath();
-      context.moveTo(0, v);
-      context.lineTo(512, v);
-      context.stroke();
-    }
-    const portalTexture = new THREE.CanvasTexture(portalCanvas);
-    portalTexture.colorSpace = THREE.SRGBColorSpace;
-    this.portalTexture = portalTexture;
-    const portal = new THREE.Mesh(
-      new THREE.PlaneGeometry(totalWidth * 1.04, totalHeight * 1.06),
-      new THREE.MeshBasicMaterial({
-        map: portalTexture,
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    );
-    portal.position.set(room.centerX, room.floorY + room.wallHeight * 0.5, config.z - 0.13);
-    portal.userData.baseOpacity = 0;
-    shell.add(portal);
-    this.arPortal = portal;
-
-    const cathedralPortal = new THREE.Mesh(
-      new THREE.PlaneGeometry(totalWidth * 1.03, totalHeight * 1.05),
-      new THREE.MeshBasicMaterial({
-        map: getCathedralTexture(),
-        color: 0xa8d9ef,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-      }),
-    );
-    cathedralPortal.position.set(room.centerX, room.floorY + room.wallHeight * 0.5, config.z - 0.2);
-    shell.add(cathedralPortal);
-    this.arCathedralPortal = cathedralPortal;
-
     const panelGeometry = new THREE.BoxGeometry(config.width * 0.94, config.height * 0.92, 0.075);
     for (let row = 0; row < config.rows; row += 1) {
       for (let column = 0; column < config.columns; column += 1) {
@@ -521,8 +463,8 @@ export class ArenaMode {
       const index = wave === 3 ? 3 : (wave - 1 + i) % 3;
       const [x, y, z] = positions[index];
       const spawn = new THREE.Vector3(x, y, z);
-      if (ar && !this.roomContainsPoint(spawn.x, spawn.z, 0.42)) {
-        const safe = this.clampPointToRoom(spawn.x, spawn.z, 0.48);
+      if (ar && !this.roomContainsPoint(spawn.x, spawn.z, 0.58)) {
+        const safe = this.clampPointToRoom(spawn.x, spawn.z, 0.62);
         spawn.set(safe.x, room.floorY, safe.y);
       }
       this.spawnEnemy(spawn, roles[index], index === 3 ? COLORS.amber : COLORS.coral);
@@ -1164,7 +1106,7 @@ export class ArenaMode {
         enemy.mesh.position.y = THREE.MathUtils.damp(enemy.mesh.position.y, enemy.origin.y, 12, dt);
       }
       if (this.isARPresentation && this.arRoom) {
-        const margin = 0.32;
+        const margin = 0.62;
         const safe = this.clampPointToRoom(enemy.mesh.position.x, enemy.mesh.position.z, margin);
         enemy.mesh.position.x = safe.x;
         enemy.mesh.position.z = safe.y;
@@ -1371,13 +1313,7 @@ export class ArenaMode {
       breach.growth = Math.min(1, breach.growth + dt * 3.8);
       const eased = THREE.MathUtils.smoothstep(breach.growth, 0, 1) * (breach.targetScale || 1);
       breach.mesh.scale.setScalar(Math.max(0.04, eased));
-      breach.mesh.userData.rim.rotation.z += dt * (breach.type === 'floor' ? 0.42 : -0.35);
-      breach.mesh.userData.halo.material.opacity = THREE.MathUtils.damp(
-        breach.mesh.userData.halo.material.opacity,
-        0.34 + Math.sin(this.elapsed * 2.1 + breach.position.x) * 0.07,
-        4,
-        dt,
-      );
+      updateRealityBreach(breach.mesh, this.elapsed, dt, breach.type);
     }
   }
 
@@ -1518,6 +1454,16 @@ export class ArenaMode {
   }
 
   getState() {
+    this.root.updateWorldMatrix(true, false);
+    const rootWorldUp = UP.clone()
+      .applyQuaternion(this.root.getWorldQuaternion(new THREE.Quaternion()))
+      .normalize();
+    const activeEnemyUprightDots = this.enemies
+      .filter((enemy) => !enemy.dead)
+      .map((enemy) => UP.clone()
+        .applyQuaternion(enemy.mesh.getWorldQuaternion(new THREE.Quaternion()))
+        .normalize()
+        .dot(UP));
     return {
       mode: 'disc_arena',
       spatialEnvironment: this.isARPresentation
@@ -1526,6 +1472,17 @@ export class ArenaMode {
       coordinateSystem: this.isARPresentation
         ? 'meters in the mapped room footprint; +x right, +y up, -z forward from placement pose'
         : 'meters; origin at first platform centerline, +x right, +y up, -z forward from initial view',
+      actorOrientation: {
+        frameWorldUp: {
+          x: +rootWorldUp.x.toFixed(3),
+          y: +rootWorldUp.y.toFixed(3),
+          z: +rootWorldUp.z.toFixed(3),
+        },
+        frameUprightDot: +rootWorldUp.dot(UP).toFixed(3),
+        enemyMinUprightDot: activeEnemyUprightDots.length
+          ? +Math.min(...activeEnemyUprightDots).toFixed(3)
+          : null,
+      },
       wave: this.wave,
       player: {
         x: +this.player.position.x.toFixed(2),
@@ -1605,7 +1562,19 @@ export class ArenaMode {
         y: +breach.position.y.toFixed(2),
         z: +breach.position.z.toFixed(2),
         radius: +breach.radius.toFixed(2),
+        visual: 'opaque_edge_layered_3d_neon_tunnel',
+        tunnelDepth: +breach.mesh.userData.tunnelDepth.toFixed(2),
+        depthMotion: Boolean(breach.mesh.userData.depthMotion),
+        motionPhase: +(breach.mesh.userData.motionPhase || 0).toFixed(3),
+        movingRings: breach.mesh.userData.tunnelRings?.length || 0,
+        latticeAxis: 'local-z',
       })),
+      breachRendering: {
+        opening: 'opaque_edge_layered_3d_neon_tunnel',
+        movingDepthLayers: true,
+        staticPlaneFallback: false,
+        persistsAfterShellPanelBreak: true,
+      },
       roomPreset: this.roomPreset,
     };
   }
@@ -1619,7 +1588,6 @@ export class ArenaMode {
       }
     });
     if (this.handDisc) disposeObject(this.handDisc);
-    this.portalTexture?.dispose();
     disposeObject(this.root);
   }
 }

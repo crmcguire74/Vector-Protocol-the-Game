@@ -370,37 +370,154 @@ export function createRoomFootprint({
 export function createRealityBreach(color = COLORS.cyan, radius = 0.68) {
   const root = new THREE.Group();
   root.name = 'persistent-reality-breach';
+  const tunnelDepth = radius * 4.6;
 
-  const aperture = new THREE.Mesh(
-    new THREE.CircleGeometry(radius * 0.91, 48),
+  const back = new THREE.Mesh(
+    new THREE.CircleGeometry(radius * 0.3, 48),
+    new THREE.MeshBasicMaterial({ color: 0x000107, side: THREE.DoubleSide, depthWrite: true }),
+  );
+  back.position.z = -tunnelDepth;
+  root.add(back);
+
+  const tunnel = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius * 0.84, radius * 0.3, tunnelDepth, 48, 12, true),
     new THREE.MeshBasicMaterial({
-      map: getCathedralTexture(),
-      color: 0x86c4db,
-      transparent: true,
-      opacity: 0.9,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
+      color: new THREE.Color(color).multiplyScalar(0.09),
+      side: THREE.BackSide,
+      transparent: false,
+      depthWrite: true,
     }),
   );
-  aperture.position.z = -0.012;
-  aperture.renderOrder = 4;
-  root.add(aperture);
+  tunnel.rotation.x = Math.PI / 2;
+  tunnel.position.z = -tunnelDepth * 0.5;
+  root.add(tunnel);
 
-  const depth = new THREE.Mesh(
-    new THREE.CircleGeometry(radius * 0.83, 48),
+  const lattice = new THREE.Mesh(
+    tunnel.geometry.clone(),
     new THREE.MeshBasicMaterial({
-      color: 0x01040a,
+      color,
+      wireframe: true,
       transparent: true,
-      opacity: 0.46,
-      side: THREE.DoubleSide,
+      opacity: 0.19,
+      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
       depthWrite: false,
+      toneMapped: false,
     }),
   );
-  depth.position.z = -0.022;
-  depth.renderOrder = 3;
-  root.add(depth);
+  lattice.rotation.copy(tunnel.rotation);
+  lattice.position.copy(tunnel.position);
+  lattice.scale.setScalar(0.985);
+  root.add(lattice);
+
+  const tunnelRings = [];
+  for (let index = 0; index < 9; index += 1) {
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(radius * 0.77, radius * 0.018, 6, 56),
+      new THREE.MeshBasicMaterial({
+        color: index % 3 === 0 ? COLORS.violet : color,
+        transparent: true,
+        opacity: 0.7,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    ring.position.z = -0.15 - (index / 9) * tunnelDepth;
+    root.add(ring);
+    tunnelRings.push(ring);
+  }
+
+  const helix = new THREE.Group();
+  for (let lane = 0; lane < 3; lane += 1) {
+    const points = [];
+    for (let index = 0; index < 88; index += 1) {
+      const progress = index / 87;
+      const angle = progress * Math.PI * 7 + lane * (Math.PI * 2 / 3);
+      const laneRadius = THREE.MathUtils.lerp(radius * 0.68, radius * 0.18, progress);
+      points.push(new THREE.Vector3(
+        Math.cos(angle) * laneRadius,
+        Math.sin(angle) * laneRadius,
+        -0.12 - progress * tunnelDepth,
+      ));
+    }
+    helix.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(points),
+      new THREE.LineBasicMaterial({
+        color: lane === 1 ? COLORS.violet : lane === 2 ? COLORS.ice : color,
+        transparent: true,
+        opacity: 0.52,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    ));
+  }
+  root.add(helix);
+
+  const starPositions = [];
+  for (let index = 0; index < 110; index += 1) {
+    const progress = ((index * 37) % 109) / 109;
+    const angle = index * 2.39996;
+    const spread = radius * THREE.MathUtils.lerp(0.72, 0.16, progress) * (0.25 + ((index * 17) % 73) / 73 * 0.75);
+    starPositions.push(
+      Math.cos(angle) * spread,
+      Math.sin(angle) * spread,
+      -0.14 - progress * tunnelDepth,
+    );
+  }
+  const starGeometry = new THREE.BufferGeometry();
+  starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
+  const stars = new THREE.Points(
+    starGeometry,
+    new THREE.PointsMaterial({
+      color: COLORS.ice,
+      size: radius * 0.045,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0.82,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  root.add(stars);
+
+  const opaqueEdge = new THREE.Mesh(
+    new THREE.RingGeometry(radius * 0.79, radius * 1.18, 64),
+    new THREE.MeshStandardMaterial({
+      color: 0x010306,
+      metalness: 0.72,
+      roughness: 0.38,
+      side: THREE.DoubleSide,
+      depthWrite: true,
+    }),
+  );
+  opaqueEdge.position.z = 0.006;
+  opaqueEdge.renderOrder = 8;
+  root.add(opaqueEdge);
+
+  const shards = [];
+  const shardMaterial = new THREE.MeshStandardMaterial({
+    color: 0x071019,
+    metalness: 0.84,
+    roughness: 0.3,
+    emissive: color,
+    emissiveIntensity: 0.08,
+  });
+  for (let index = 0; index < 18; index += 1) {
+    const angle = (index / 18) * Math.PI * 2;
+    const shard = new THREE.Mesh(
+      new THREE.ConeGeometry(radius * (0.045 + (index % 3) * 0.012), radius * (0.18 + (index % 4) * 0.045), 3),
+      shardMaterial,
+    );
+    shard.position.set(Math.cos(angle) * radius, Math.sin(angle) * radius, 0.035);
+    shard.rotation.z = angle - Math.PI / 2;
+    shard.rotation.x = (index % 2 ? 0.2 : -0.16);
+    shard.renderOrder = 9;
+    root.add(shard);
+    shards.push(shard);
+  }
 
   const halo = new THREE.Mesh(
     new THREE.PlaneGeometry(radius * 2.75, radius * 2.75),
@@ -420,7 +537,7 @@ export function createRealityBreach(color = COLORS.cyan, radius = 0.68) {
   root.add(halo);
 
   const rim = new THREE.Mesh(
-    new THREE.RingGeometry(radius * 0.86, radius, 48),
+    new THREE.RingGeometry(radius * 0.78, radius * 0.85, 64),
     new THREE.MeshBasicMaterial({
       color,
       transparent: true,
@@ -431,8 +548,8 @@ export function createRealityBreach(color = COLORS.cyan, radius = 0.68) {
       toneMapped: false,
     }),
   );
-  rim.position.z = 0.012;
-  rim.renderOrder = 6;
+  rim.position.z = 0.045;
+  rim.renderOrder = 10;
   root.add(rim);
 
   const edgePoints = [];
@@ -452,14 +569,49 @@ export function createRealityBreach(color = COLORS.cyan, radius = 0.68) {
       toneMapped: false,
     }),
   );
-  edge.renderOrder = 7;
+  edge.renderOrder = 11;
   root.add(edge);
 
   root.userData.radius = radius;
-  root.userData.aperture = aperture;
+  root.userData.aperture = tunnel;
   root.userData.rim = rim;
   root.userData.halo = halo;
+  root.userData.tunnel = tunnel;
+  root.userData.lattice = lattice;
+  root.userData.tunnelRings = tunnelRings;
+  root.userData.helix = helix;
+  root.userData.stars = stars;
+  root.userData.shards = shards;
+  root.userData.tunnelDepth = tunnelDepth;
+  root.userData.phase = radius * 13.7;
   return root;
+}
+
+export function updateRealityBreach(root, time, dt, type = 'wall') {
+  if (!root?.userData?.tunnelRings) return;
+  const data = root.userData;
+  const depth = data.tunnelDepth;
+  const phase = time * (type === 'floor' ? 0.72 : 0.94) + data.phase;
+  data.tunnelRings.forEach((ring, index) => {
+    const travel = (phase * 0.38 + index / data.tunnelRings.length) % 1;
+    const scale = THREE.MathUtils.lerp(0.34, 1, 1 - travel);
+    ring.position.z = -0.1 - travel * depth;
+    ring.scale.setScalar(scale);
+    ring.rotation.z += dt * (index % 2 ? -0.72 : 0.54);
+    ring.material.opacity = 0.18 + (1 - travel) * 0.68;
+  });
+  data.lattice.rotation.z += dt * 0.12;
+  data.helix.rotation.z += dt * (type === 'floor' ? 0.36 : -0.28);
+  data.stars.rotation.z -= dt * 0.18;
+  data.stars.position.z = Math.sin(phase * 1.7) * 0.06;
+  data.rim.rotation.z += dt * 0.5;
+  data.rim.material.opacity = 0.72 + Math.sin(phase * 4.2) * 0.18;
+  data.halo.material.opacity = 0.28 + Math.sin(phase * 2.7) * 0.08;
+  data.shards.forEach((shard, index) => {
+    shard.position.z = 0.03 + Math.sin(phase * 2.1 + index) * 0.012;
+  });
+  data.motionPhase = ((phase % 1) + 1) % 1;
+  data.depthMotion = true;
 }
 
 function armorMaterial(color) {

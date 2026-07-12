@@ -9,6 +9,8 @@ import { BikeMode } from './BikeMode.js';
 import { COLORS, createEnvironment, createGlow, disposeObject, getCathedralTexture } from './Visuals.js';
 import { preloadSentinelAsset } from './SentinelAsset.js';
 
+const AR_FLOOR_ALIGNMENT_MIN = 0.94;
+
 class InputState {
   constructor() {
     this.down = new Set();
@@ -227,12 +229,21 @@ export class DigiWorld {
     this.xrHitTestSource = null;
     this.xrAnchor = null;
     this.xrBoundedReferenceSpace = null;
+    this.xrLocalFloorReferenceSpace = null;
     this.arBoundedFloor = null;
     this.arBoundedFloorSignature = '';
     this.arBoundedFloorMode = null;
     this.arReticle = null;
     this.arPlaced = false;
     this.arLastPoseMatrix = null;
+    this.arPlacementPending = false;
+    this.arPlacementCandidateMatrix = null;
+    this.arPlacementCandidateHit = null;
+    this.arPlacementCandidateValid = false;
+    this.arPlacementConfirmQueued = false;
+    this.arPlacementStatus = 'inactive';
+    this.arPlacementSource = 'none';
+    this.arPlacementFloorAlignment = null;
     this.xrHudPanel = null;
     this.xrHudTexture = null;
     this.xrMessagePanel = null;
@@ -315,6 +326,10 @@ export class DigiWorld {
         this.resetHeldActions();
       });
       controller.addEventListener('selectstart', () => {
+        if (this.arPlacementPending) {
+          this.queueARPlacementConfirmation();
+          return;
+        }
         if (this.phase === 'paused') {
           this.resume();
           return;
@@ -348,6 +363,7 @@ export class DigiWorld {
         if (this.phase === 'running') this.currentMode?.primaryStart(this.getAimRay(controller));
       });
       controller.addEventListener('selectend', () => {
+        if (this.arPlacementPending) return;
         if (controller.userData.screenSteer) {
           controller.userData.screenSteer = false;
           return;
@@ -463,6 +479,11 @@ export class DigiWorld {
   setupInput() {
     window.addEventListener('keydown', (event) => {
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) event.preventDefault();
+      if (this.arPlacementPending && (event.code === 'Enter' || event.code === 'Space')) {
+        event.preventDefault();
+        if (!event.repeat) this.queueARPlacementConfirmation();
+        return;
+      }
       if (event.code === 'KeyM') {
         event.preventDefault();
         if (!event.repeat) this.toggleMusic();
@@ -497,6 +518,10 @@ export class DigiWorld {
     this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     this.canvas.addEventListener('mousedown', (event) => {
       if (this.phase !== 'running') return;
+      if (this.arPlacementPending && event.button === 0) {
+        this.queueARPlacementConfirmation();
+        return;
+      }
       const code = `Mouse${event.button}`;
       this.input.press(code);
       if (event.button === 0) {
@@ -577,9 +602,13 @@ export class DigiWorld {
     }, () => this.input.release('KeyD'));
     bind(this.ui.touchPrimary, () => {
       if (this.phase !== 'running') return;
+      if (this.arPlacementPending) {
+        this.queueARPlacementConfirmation();
+        return;
+      }
       this.currentMode?.primaryStart(this.getAimRay());
     }, () => {
-      if (this.phase === 'running') this.currentMode?.primaryEnd(this.getAimRay());
+      if (this.phase === 'running' && !this.arPlacementPending) this.currentMode?.primaryEnd(this.getAimRay());
     });
     bind(this.ui.touchSecondary, () => {
       if (this.phase !== 'running') return;
@@ -599,7 +628,7 @@ export class DigiWorld {
 
   configureTouchControls() {
     const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches;
-    const visible = this.phase === 'running' && (coarsePointer || this.presentation === 'ar');
+    const visible = this.phase === 'running' && !this.arPlacementPending && (coarsePointer || this.presentation === 'ar');
     this.ui.touchControls?.classList.toggle('hidden', !visible);
     if (!visible) return;
     const bike = this.currentMode?.name === 'bike';
@@ -704,6 +733,8 @@ export class DigiWorld {
       new THREE.LineBasicMaterial({ color: COLORS.ice, transparent: true, opacity: 0.7 }),
     );
     reticle.add(ring, cross);
+    reticle.userData.ring = ring;
+    reticle.userData.cross = cross;
     reticle.visible = false;
     this.scene.add(reticle);
     this.arReticle = reticle;
@@ -712,6 +743,7 @@ export class DigiWorld {
   async setupARPlacement(session) {
     this.arPlaced = false;
     this.createARReticle();
+    if (this.gameMode === 'arena') this.beginARPlacementSetup(false);
     if (!session.requestHitTestSource) return;
     try {
       const viewerSpace = await session.requestReferenceSpace('viewer');
@@ -722,10 +754,139 @@ export class DigiWorld {
     }
   }
 
+  beginARPlacementSetup(preview = false) {
+    this.arPlaced = false;
+    this.arPlacementPending = true;
+    this.arPlacementConfirmQueued = false;
+    this.arPlacementCandidateHit = null;
+    this.arPlacementCandidateMatrix = preview ? new THREE.Matrix4() : null;
+    this.arPlacementCandidateValid = preview;
+    this.arPlacementSource = preview ? 'preset-room-footprint' : 'scanning';
+    this.arPlacementFloorAlignment = preview ? 1 : null;
+    this.arPlacementStatus = preview ? 'preview-ready' : 'scanning-floor';
+    if (this.currentMode?.name === 'arena') {
+      this.currentMode.root.visible = false;
+      if (this.currentMode.handDisc) this.currentMode.handDisc.visible = false;
+    }
+    this.updateARPlacementPanel();
+    this.configureTouchControls();
+  }
+
+  updateARPlacementPanel() {
+    const panel = this.ui.arPlacementPanel;
+    if (!panel) return;
+    panel.classList.toggle('hidden', !this.arPlacementPending);
+    if (!this.arPlacementPending) return;
+    const ready = this.arPlacementCandidateValid;
+    const invalidSurface = this.arPlacementStatus === 'surface-too-steep';
+    if (this.ui.arPlacementStatus) {
+      this.ui.arPlacementStatus.textContent = ready
+        ? (this.presentation === 'ar' ? 'Floor found — confirm placement' : 'Preset room ready')
+        : invalidSurface
+          ? 'Aim at the floor'
+          : 'Scanning for your floor';
+    }
+    if (this.ui.arPlacementDetail) {
+      this.ui.arPlacementDetail.textContent = ready
+        ? (this.presentation === 'ar'
+            ? 'Use the trigger or Confirm Floor. The room will not place itself.'
+            : `Confirm the ${this.roomPreset} preset to test AR room-scale gameplay.`)
+        : invalidSurface
+          ? 'Walls and steep surfaces are rejected so every character remains upright.'
+          : 'Move your headset or phone slowly until the cyan floor marker appears.';
+    }
+    if (this.ui.arPlaceButton) {
+      this.ui.arPlaceButton.disabled = !ready;
+      this.ui.arPlaceButton.textContent = this.presentation === 'ar' ? 'Confirm floor' : 'Place preset room';
+    }
+  }
+
+  queueARPlacementConfirmation() {
+    if (!this.arPlacementPending) return false;
+    if (!this.arPlacementCandidateValid) {
+      this.arPlacementConfirmQueued = false;
+      this.arPlacementStatus = 'floor-not-ready';
+      this.updateARPlacementPanel();
+      return false;
+    }
+    if (this.presentation !== 'ar') {
+      this.finishARPlacement(null);
+      return true;
+    }
+    this.arPlacementConfirmQueued = true;
+    return true;
+  }
+
+  sanitizeFloorMatrix(matrix) {
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    matrix.decompose(position, quaternion, scale);
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion);
+    forward.y = 0;
+    const yaw = forward.lengthSq() > 1e-6 ? Math.atan2(-forward.x, -forward.z) : 0;
+    quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    return new THREE.Matrix4().compose(position, quaternion, new THREE.Vector3(1, 1, 1));
+  }
+
+  setARPlacementCandidate(transform, source, hit = null) {
+    if (!transform?.matrix) return false;
+    const matrix = new THREE.Matrix4().fromArray(transform.matrix);
+    const quaternion = new THREE.Quaternion();
+    matrix.decompose(new THREE.Vector3(), quaternion, new THREE.Vector3());
+    const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion).normalize();
+    const alignment = normal.dot(new THREE.Vector3(0, 1, 0));
+    const valid = alignment >= AR_FLOOR_ALIGNMENT_MIN;
+    this.arPlacementFloorAlignment = alignment;
+    this.arPlacementCandidateValid = valid;
+    this.arPlacementCandidateHit = valid ? hit : null;
+    this.arPlacementCandidateMatrix = valid ? this.sanitizeFloorMatrix(matrix) : null;
+    this.arPlacementSource = valid ? source : 'rejected-steep-surface';
+    this.arPlacementStatus = valid ? 'floor-ready' : 'surface-too-steep';
+    if (this.arReticle) {
+      this.arReticle.visible = true;
+      this.arReticle.matrix.copy(valid ? this.arPlacementCandidateMatrix : matrix);
+      this.arReticle.userData.ring.material.color.setHex(valid ? COLORS.cyan : COLORS.coral);
+      this.arReticle.userData.cross.material.color.setHex(valid ? COLORS.ice : COLORS.coral);
+    }
+    this.updateARPlacementPanel();
+    return valid;
+  }
+
+  finishARPlacement(hit = this.arPlacementCandidateHit) {
+    if (!this.arPlacementPending || !this.arPlacementCandidateValid) return false;
+    if (this.presentation === 'ar' && this.arPlacementCandidateMatrix) {
+      this.applyARPose({ matrix: this.arPlacementCandidateMatrix.elements });
+    }
+    this.arPlaced = true;
+    this.arPlacementPending = false;
+    this.arPlacementConfirmQueued = false;
+    this.arPlacementStatus = 'confirmed';
+    if (this.currentMode?.name === 'arena') {
+      this.currentMode.root.visible = true;
+      if (this.currentMode.handDisc) this.currentMode.handDisc.visible = this.currentMode.player.discs > 0;
+    }
+    if (this.arReticle) this.arReticle.visible = false;
+    this.updateARPlacementPanel();
+    this.configureTouchControls();
+    this.announce(
+      this.presentation === 'ar' ? 'FLOOR CONFIRMED // ROOM ANCHORED' : 'PRESET ROOM CONFIRMED',
+      1.5,
+    );
+    if (this.presentation === 'ar' && typeof hit?.createAnchor === 'function') {
+      hit.createAnchor().then((anchor) => {
+        if (this.xrSession) this.xrAnchor = anchor;
+        else anchor.delete?.();
+      }).catch(() => {});
+    }
+    return true;
+  }
+
   applyARPose(transform) {
     const root = this.currentMode?.root;
     if (!root || !transform?.matrix) return;
-    const matrix = new THREE.Matrix4().fromArray(transform.matrix);
+    let matrix = new THREE.Matrix4().fromArray(transform.matrix);
+    if (this.currentMode?.name === 'arena') matrix = this.sanitizeFloorMatrix(matrix);
     this.arLastPoseMatrix = matrix.clone();
     const position = new THREE.Vector3();
     const quaternion = new THREE.Quaternion();
@@ -798,6 +959,50 @@ export class DigiWorld {
     const referenceSpace = this.renderer.xr.getReferenceSpace();
     if (!referenceSpace) return;
 
+    if (this.arPlacementPending && this.currentMode.name === 'arena') {
+      let candidateOffered = false;
+      if (this.xrBoundedReferenceSpace?.boundsGeometry?.length >= 3) {
+        const boundedPose = frame.getPose(this.xrBoundedReferenceSpace, referenceSpace);
+        if (boundedPose) {
+          candidateOffered = this.setARPlacementCandidate(boundedPose.transform, 'webxr-bounded-floor');
+        }
+      }
+      if (!candidateOffered && this.xrHitTestSource) {
+        const hits = frame.getHitTestResults(this.xrHitTestSource);
+        let firstInvalid = null;
+        for (const hit of hits) {
+          const pose = hit.getPose(referenceSpace);
+          if (!pose) continue;
+          if (this.setARPlacementCandidate(pose.transform, 'floor-hit-test', hit)) {
+            candidateOffered = true;
+            break;
+          }
+          if (!firstInvalid) firstInvalid = { hit, pose };
+        }
+        if (!candidateOffered && firstInvalid) {
+          this.setARPlacementCandidate(firstInvalid.pose.transform, 'rejected-steep-surface', firstInvalid.hit);
+        }
+      }
+      if (!candidateOffered && this.xrLocalFloorReferenceSpace) {
+        const floorPose = frame.getPose(this.xrLocalFloorReferenceSpace, referenceSpace);
+        if (floorPose) {
+          candidateOffered = this.setARPlacementCandidate(floorPose.transform, 'preset-local-floor');
+        }
+      }
+      if (!candidateOffered && !this.arPlacementCandidateValid) {
+        this.arPlacementStatus = this.arPlacementStatus === 'surface-too-steep'
+          ? 'surface-too-steep'
+          : 'scanning-floor';
+        this.updateARPlacementPanel();
+      }
+      if (this.arPlacementConfirmQueued && this.arPlacementCandidateValid) {
+        const hit = this.arPlacementCandidateHit;
+        this.finishARPlacement(hit);
+        this.updateARBoundedFloor(frame, referenceSpace);
+      }
+      return;
+    }
+
     if (this.xrAnchor?.anchorSpace) {
       const anchorPose = frame.getPose(this.xrAnchor.anchorSpace, referenceSpace);
       if (anchorPose) this.applyARPose(anchorPose.transform);
@@ -835,11 +1040,21 @@ export class DigiWorld {
     this.xrAnchor?.delete?.();
     this.xrAnchor = null;
     this.xrBoundedReferenceSpace = null;
+    this.xrLocalFloorReferenceSpace = null;
     this.arBoundedFloor = null;
     this.arBoundedFloorSignature = '';
     this.arBoundedFloorMode = null;
     this.arPlaced = false;
     this.arLastPoseMatrix = null;
+    this.arPlacementPending = false;
+    this.arPlacementCandidateMatrix = null;
+    this.arPlacementCandidateHit = null;
+    this.arPlacementCandidateValid = false;
+    this.arPlacementConfirmQueued = false;
+    this.arPlacementStatus = 'inactive';
+    this.arPlacementSource = 'none';
+    this.arPlacementFloorAlignment = null;
+    this.updateARPlacementPanel();
     if (this.arReticle) {
       disposeObject(this.arReticle);
       this.arReticle = null;
@@ -1005,6 +1220,12 @@ export class DigiWorld {
     this.ui.xrExit.classList.remove('hidden');
     if (isAR) {
       try {
+        const localFloorSpace = await session.requestReferenceSpace('local-floor');
+        if (session === this.xrSession) this.xrLocalFloorReferenceSpace = localFloorSpace;
+      } catch (error) {
+        console.info('[Vector Protocol] Local-floor fallback unavailable:', error.message);
+      }
+      try {
         const boundedSpace = await session.requestReferenceSpace('bounded-floor');
         if (session === this.xrSession && boundedSpace?.boundsGeometry?.length >= 3) {
           this.xrBoundedReferenceSpace = boundedSpace;
@@ -1024,6 +1245,9 @@ export class DigiWorld {
     this.xrSession = null;
     this.presentation = 'desktop';
     this.xrCapabilities.activeFeatures = [];
+    if (this.requestedPresentation === 'ar' && this.currentMode?.name === 'arena' && this.phase !== 'menu') {
+      this.beginARPlacementSetup(true);
+    }
     this.ui.xrExit.classList.add('hidden');
     if (this.phase === 'paused' && this.autoPausedByVisibility) {
       this.autoPausedByVisibility = false;
@@ -1096,6 +1320,13 @@ export class DigiWorld {
     if (this.presentation === 'ar' && this.arLastPoseMatrix) {
       this.applyARPose({ matrix: this.arLastPoseMatrix.elements });
     }
+    if (gameMode === 'arena' && this.requestedPresentation === 'ar') {
+      if (!this.arPlaced) this.beginARPlacementSetup(this.presentation !== 'ar');
+      else this.currentMode.root.visible = true;
+    } else {
+      this.arPlacementPending = false;
+      this.updateARPlacementPanel();
+    }
     this.ui.menu.classList.add('hidden');
     this.ui.pauseMenu.classList.add('hidden');
     this.ui.resultScreen.classList.add('hidden');
@@ -1107,7 +1338,9 @@ export class DigiWorld {
     this.ui.speedReadout.classList.toggle('hidden', gameMode !== 'bike');
     document.body.classList.add('is-playing');
     this.configureTouchControls();
-    if (this.presentation === 'desktop') this.canvas.requestPointerLock?.().catch?.(() => {});
+    if (this.presentation === 'desktop' && !this.arPlacementPending) {
+      this.canvas.requestPointerLock?.().catch?.(() => {});
+    }
   }
 
   pause(showMenu = true) {
@@ -1364,7 +1597,7 @@ export class DigiWorld {
     }
     if (this.phase === 'running') {
       this.updateXRControls();
-      this.currentMode?.update(dt);
+      if (!this.arPlacementPending) this.currentMode?.update(dt);
     }
     this.updateOverlayTimers(dt);
   }
@@ -1411,6 +1644,19 @@ export class DigiWorld {
   }
 
   getState() {
+    let actorWorldUp = null;
+    if (this.currentMode?.name === 'arena') {
+      this.currentMode.root.updateWorldMatrix(true, false);
+      const up = new THREE.Vector3(0, 1, 0)
+        .applyQuaternion(this.currentMode.root.getWorldQuaternion(new THREE.Quaternion()))
+        .normalize();
+      actorWorldUp = {
+        x: +up.x.toFixed(3),
+        y: +up.y.toFixed(3),
+        z: +up.z.toFixed(3),
+        uprightDot: +up.y.toFixed(3),
+      };
+    }
     return {
       title: 'VECTOR PROTOCOL',
       phase: this.phase,
@@ -1420,6 +1666,21 @@ export class DigiWorld {
       roomPreset: this.roomPreset,
       xr: {
         ...this.xrCapabilities,
+        placement: {
+          required: this.requestedPresentation === 'ar' && this.gameMode === 'arena',
+          pending: this.arPlacementPending,
+          confirmed: this.arPlaced,
+          candidateValid: this.arPlacementCandidateValid,
+          status: this.arPlacementStatus,
+          source: this.arPlacementSource,
+          floorAlignment: this.arPlacementFloorAlignment === null
+            ? null
+            : +this.arPlacementFloorAlignment.toFixed(3),
+          floorOnlyAlignmentMin: AR_FLOOR_ALIGNMENT_MIN,
+          maxAcceptedTiltDegrees: +THREE.MathUtils.radToDeg(Math.acos(AR_FLOOR_ALIGNMENT_MIN)).toFixed(1),
+          actorWorldUp,
+          simulationGated: this.arPlacementPending,
+        },
         boundedFloor: this.arBoundedFloor
           ? {
               source: this.arBoundedFloor.source,

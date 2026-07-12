@@ -56,9 +56,9 @@ In VR, a controller trigger charges/releases a disc or boosts the bike; grip gua
 
 ## AR room mapping
 
-Immersive AR requests a WebXR `bounded-floor` reference space and transforms its polygon into the placed game root. That real polygon governs player support, Sentinel spawning and roaming, containment, and disc banks. If the device does not expose usable bounds, the menu offers explicit small, large, and compact room-size fallbacks.
+Immersive AR requests a WebXR `bounded-floor` reference space and transforms its polygon into the placed game root. The player must confirm a cyan floor marker before combat begins; walls and surfaces tilted more than about 20° are rejected, and pitch/roll are removed from the final anchor so actors remain upright. The accepted room polygon governs player support, Sentinel spawning and roaming, containment, and disc banks. If the device does not expose usable bounds, the menu offers explicit small, large, and compact room-size fallbacks.
 
-AR also requests hit testing, anchors, plane detection, depth sensing, light estimation, and DOM overlay as optional capabilities. The room remains the visible environment: only faint calibration lines are added before combat. Disc impacts create localized persistent wall/floor breaches that reveal the digital cathedral beneath the physical space.
+AR also requests hit testing, anchors, plane detection, depth sensing, light estimation, and DOM overlay as optional capabilities. The room remains the visible environment: only faint calibration lines are added before combat. Disc impacts create localized persistent wall/floor openings with opaque fractured edges and animated 3D neon tunnels—moving rings, lattice, helixes, and particles replace the previous flat portal image.
 
 ## Testability
 
