@@ -157,13 +157,113 @@ export function createEnvironment({ ar = false } = {}) {
       );
       ring.rotation.x = Math.PI / 2 + (i - 3) * 0.035;
       ring.position.y = -6 + i * 2.2;
+      ring.userData.baseY = ring.position.y;
       root.add(ring);
       if (!root.userData.rings) root.userData.rings = [];
       root.userData.rings.push(ring);
     }
+
+    // Energy pulses that circulate the circuit rings like packets on a bus.
+    const pulseArcs = [];
+    for (let i = 0; i < 4; i += 1) {
+      const ringIndex = 1 + i * 2;
+      const arc = new THREE.Mesh(
+        new THREE.TorusGeometry(10 + ringIndex * 4.7, 0.05, 5, 24, 0.42),
+        new THREE.MeshBasicMaterial({
+          color: i % 2 ? COLORS.violet : COLORS.cyan,
+          transparent: true,
+          opacity: 0.5,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        }),
+      );
+      arc.rotation.x = Math.PI / 2 + (ringIndex - 3) * 0.035;
+      arc.position.y = -6 + ringIndex * 2.2;
+      arc.userData.speed = (i % 2 ? -1 : 1) * (0.24 + i * 0.09);
+      root.add(arc);
+      pulseArcs.push(arc);
+    }
+
+    // Rising data streams: thin vertical streaks climbing out of the depths,
+    // wrapping back down once they pass the upper haze.
+    const rainCount = 120;
+    const rainPositions = new Float32Array(rainCount * 6);
+    const rainColors = new Float32Array(rainCount * 6);
+    const rainData = [];
+    const ice = new THREE.Color(0xbdfdff);
+    for (let i = 0; i < rainCount; i += 1) {
+      const angle = random() * Math.PI * 2;
+      const radius = 21 + random() * 38;
+      const drop = {
+        x: Math.cos(angle) * radius,
+        z: Math.sin(angle) * radius,
+        y: -12 + random() * 46,
+        speed: 1.4 + random() * 3.6,
+        length: 0.5 + random() * 1.7,
+      };
+      rainData.push(drop);
+      const color = (i % 5 === 0 ? ice : cyan).clone().lerp(violet, random() * 0.75);
+      for (const end of [0, 1]) {
+        rainColors[i * 6 + end * 3] = color.r;
+        rainColors[i * 6 + end * 3 + 1] = color.g;
+        rainColors[i * 6 + end * 3 + 2] = color.b;
+      }
+    }
+    const rainGeometry = new THREE.BufferGeometry();
+    const rainAttribute = new THREE.BufferAttribute(rainPositions, 3);
+    rainAttribute.setUsage(THREE.DynamicDrawUsage);
+    rainGeometry.setAttribute('position', rainAttribute);
+    rainGeometry.setAttribute('color', new THREE.BufferAttribute(rainColors, 3));
+    const dataRain = new THREE.LineSegments(
+      rainGeometry,
+      new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.3,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    dataRain.name = 'rising-data-streams';
+    root.add(dataRain);
+
+    // Distant data spires along the horizon with individual flicker phases.
+    const beams = [];
+    const beamGroup = new THREE.Group();
+    beamGroup.name = 'horizon-data-spires';
+    for (let i = 0; i < 16; i += 1) {
+      const angle = (i / 16) * Math.PI * 2 + random() * 0.3;
+      const radius = 52 + random() * 9;
+      const height = 9 + random() * 21;
+      const beam = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.34 + random() * 0.7, height),
+        new THREE.MeshBasicMaterial({
+          color: i % 3 === 0 ? COLORS.violet : COLORS.cyan,
+          transparent: true,
+          opacity: 0.14,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          fog: false,
+        }),
+      );
+      beam.position.set(Math.cos(angle) * radius, -9 + height * 0.5, Math.sin(angle) * radius);
+      beam.rotation.y = -angle + Math.PI / 2;
+      beam.userData.phase = random() * Math.PI * 2;
+      beam.userData.rate = 0.5 + random() * 1.4;
+      beam.userData.baseOpacity = 0.09 + random() * 0.1;
+      beamGroup.add(beam);
+      beams.push(beam);
+    }
+    root.add(beamGroup);
+
     root.userData.panorama = panorama;
     root.userData.stars = stars;
     root.userData.dome = dome;
+    root.userData.pulseArcs = pulseArcs;
+    root.userData.dataRain = { mesh: dataRain, data: rainData, attribute: rainAttribute };
+    root.userData.beams = beams;
   }
 
   return root;
@@ -179,8 +279,34 @@ export function updateEnvironment(root, time, dt) {
   root.userData.rings?.forEach((ring, index) => {
     ring.rotation.z += dt * (index % 2 ? -0.008 : 0.006);
     ring.material.opacity = 0.08 + index * 0.012 + Math.sin(time * 0.5 + index) * 0.025;
+    ring.position.y = ring.userData.baseY + Math.sin(time * 0.32 + index * 1.7) * 0.09;
   });
   if (root.userData.dome) root.userData.dome.rotation.y += dt * 0.004;
+  root.userData.pulseArcs?.forEach((arc, index) => {
+    arc.rotation.z += dt * arc.userData.speed;
+    arc.material.opacity = 0.34 + Math.sin(time * 2.1 + index * 1.9) * 0.18;
+  });
+  if (root.userData.dataRain) {
+    const { data, attribute } = root.userData.dataRain;
+    const positions = attribute.array;
+    for (let i = 0; i < data.length; i += 1) {
+      const drop = data[i];
+      drop.y += drop.speed * dt;
+      if (drop.y > 36) drop.y = -13 - ((i * 29) % 40) * 0.1;
+      const base = i * 6;
+      positions[base] = drop.x;
+      positions[base + 1] = drop.y;
+      positions[base + 2] = drop.z;
+      positions[base + 3] = drop.x;
+      positions[base + 4] = drop.y + drop.length;
+      positions[base + 5] = drop.z;
+    }
+    attribute.needsUpdate = true;
+  }
+  root.userData.beams?.forEach((beam) => {
+    const flicker = Math.sin(time * beam.userData.rate + beam.userData.phase);
+    beam.material.opacity = beam.userData.baseOpacity + Math.max(0, flicker) * 0.1;
+  });
 }
 
 export function createPlatform(radius, height = 0, accent = COLORS.cyan, seed = 0) {

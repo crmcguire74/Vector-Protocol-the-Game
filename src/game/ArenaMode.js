@@ -163,7 +163,9 @@ export class ArenaMode {
       voidGrid.material.transparent = true;
       voidGrid.material.opacity = 0.24;
       this.root.add(voidGrid);
+      this.voidGrid = voidGrid;
 
+      this.driftColumns = [];
       for (let i = 0; i < 22; i += 1) {
         const column = new THREE.Mesh(
           new THREE.OctahedronGeometry(0.28 + this.random() * 0.9, 0),
@@ -181,6 +183,15 @@ export class ArenaMode {
         column.scale.y = 2 + this.random() * 7;
         column.rotation.set(this.random(), this.random(), this.random());
         this.root.add(column);
+        this.driftColumns.push({
+          mesh: column,
+          baseY: column.position.y,
+          phase: this.random() * Math.PI * 2,
+          bobRate: 0.2 + this.random() * 0.3,
+          bobHeight: 0.25 + this.random() * 0.45,
+          spin: (this.random() - 0.5) * 0.08,
+          pulseRate: 0.6 + this.random() * 1.2,
+        });
       }
     }
   }
@@ -1420,6 +1431,18 @@ export class ArenaMode {
     updateBursts(this.bursts, dt);
     updateShockwaves(this.shockwaves, dt, this.world.camera);
     updateEnvironment(this.environment, this.elapsed, dt);
+    if (this.voidGrid) {
+      this.voidGrid.material.opacity = 0.22 + Math.sin(this.elapsed * 0.7) * 0.05;
+    }
+    if (this.driftColumns) {
+      for (const column of this.driftColumns) {
+        column.mesh.position.y =
+          column.baseY + Math.sin(this.elapsed * column.bobRate + column.phase) * column.bobHeight;
+        column.mesh.rotation.y += column.spin * dt;
+        column.mesh.material.emissiveIntensity =
+          0.2 + Math.max(0, Math.sin(this.elapsed * column.pulseRate + column.phase)) * 0.16;
+      }
+    }
     this.platforms.forEach((platform, index) => {
       const rim = platform.mesh.userData.rim;
       const innerRim = platform.mesh.userData.innerRim;

@@ -322,6 +322,17 @@ export class BikeMode {
     supports.instanceMatrix.needsUpdate = true;
     boundary.add(supports);
 
+    this.arenaPulse = {
+      grid: grid.material,
+      outerGrid: outerGrid.material,
+      floor: floor.material,
+      lowerRail: lowerRailMaterial,
+      seam: seamMaterial,
+      upperRail: upperRailMaterial,
+      supports: supportMaterial,
+      wall: wallMaterial,
+    };
+
     const towerGeometry = new THREE.CylinderGeometry(0.42, 0.68, wallHeight + 2.6, 8);
     for (const [x, z] of [
       [-boundaryOffset, -boundaryOffset],
@@ -905,7 +916,18 @@ export class BikeMode {
     this.root.add(mesh);
     const key = this.cellKey(oldX, oldZ);
     this.occupancy.set(key, { id, owner: rider.id });
-    this.trails.push({ id, owner: rider.id, key, mesh, age: 0, maxAge: 12 });
+    this.trails.push({
+      id,
+      owner: rider.id,
+      key,
+      mesh,
+      age: 0,
+      maxAge: 12,
+      ax: oldX,
+      az: oldZ,
+      bx: newX,
+      bz: newZ,
+    });
   }
 
   crashRider(rider, collisionOwner = null) {
@@ -1450,6 +1472,35 @@ export class BikeMode {
     context.textAlign = 'left';
     context.fillText('TACTICAL / N', inset, 15);
 
+    // Live light-wall paths, grouped by owner so each rider's circuit reads
+    // as one continuous colored line. Older segments fade exactly like the
+    // 3D walls do (solid until age 8, dissolving until maxAge).
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    for (const rider of this.riders) {
+      const cssColor = `#${new THREE.Color(rider.color).getHexString()}`;
+      context.strokeStyle = cssColor;
+      context.shadowColor = cssColor;
+      for (const trail of this.trails) {
+        if (trail.owner !== rider.id) continue;
+        const fade = trail.age > 8
+          ? Math.max(0, (trail.maxAge - trail.age) / (trail.maxAge - 8))
+          : 1;
+        if (fade <= 0) continue;
+        const a = toMap(trail.ax, trail.az);
+        const b = toMap(trail.bx, trail.bz);
+        context.globalAlpha = 0.22 + fade * 0.68;
+        context.lineWidth = rider.id === 0 ? 3 : 2.4;
+        context.shadowBlur = fade * 4;
+        context.beginPath();
+        context.moveTo(a.x, a.y);
+        context.lineTo(b.x, b.y);
+        context.stroke();
+      }
+    }
+    context.globalAlpha = 1;
+    context.shadowBlur = 0;
+
     for (const rider of this.riders) {
       if (!rider.alive) continue;
       const point = toMap(rider.x, rider.z);
@@ -1799,6 +1850,18 @@ export class BikeMode {
     if (this.animatedLights) {
       this.animatedLights.blue.intensity = 20 + Math.sin(this.elapsed * 1.7) * 2;
       this.animatedLights.red.intensity = 16 + Math.sin(this.elapsed * 1.3 + 1.4) * 2;
+    }
+    if (this.arenaPulse) {
+      const slow = Math.sin(this.elapsed * 0.9);
+      const beat = Math.sin(this.elapsed * 2.2);
+      this.arenaPulse.grid.opacity = 0.32 + slow * 0.05;
+      this.arenaPulse.outerGrid.opacity = 0.13 + Math.sin(this.elapsed * 0.55 + 2) * 0.04;
+      this.arenaPulse.floor.emissiveIntensity = 0.62 + slow * 0.1;
+      this.arenaPulse.lowerRail.opacity = 0.58 + beat * 0.09;
+      this.arenaPulse.seam.opacity = 0.3 + Math.sin(this.elapsed * 1.4 + 0.8) * 0.1;
+      this.arenaPulse.upperRail.opacity = 0.5 + Math.sin(this.elapsed * 1.1 + 1.9) * 0.07;
+      this.arenaPulse.supports.opacity = 0.33 + Math.sin(this.elapsed * 1.8 + 3.1) * 0.07;
+      this.arenaPulse.wall.emissiveIntensity = 0.4 + slow * 0.08;
     }
     this.score += dt * (boosting ? 28 : 10);
     const activeEnemies = this.riders.slice(1).filter((rider) => rider.alive).length;
