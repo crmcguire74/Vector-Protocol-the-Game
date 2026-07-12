@@ -1557,18 +1557,18 @@
     position: absolute;
     top: 2rem;
     right: 2rem;
-    width: 7.2rem;
+    width: 9rem;
     aspect-ratio: 1;
     overflow: hidden;
-    border: 1px solid rgb(88 242 255 / 27%);
+    border: 1px solid rgb(88 242 255 / 52%);
     border-radius: 50%;
     background:
       radial-gradient(circle, transparent 24%, rgb(88 242 255 / 12%) 25% 26%, transparent 27% 49%, rgb(88 242 255 / 9%) 50% 51%, transparent 52%),
       linear-gradient(rgb(88 242 255 / 8%) 1px, transparent 1px),
       linear-gradient(90deg, rgb(88 242 255 / 8%) 1px, transparent 1px),
-      rgb(1 8 13 / 65%);
+      rgb(1 8 13 / 82%);
     background-size: 100%, 1rem 1rem, 1rem 1rem, 100%;
-    box-shadow: inset 0 0 2rem rgb(88 242 255 / 5%);
+    box-shadow: inset 0 0 2rem rgb(88 242 255 / 9%), 0 0 1.4rem rgb(2 12 18 / 62%);
   }
 
   .minimap__label {
@@ -1586,19 +1586,12 @@
     height: 1px;
     background: linear-gradient(90deg, var(--cyan), transparent);
     transform-origin: left;
-    animation: scanner-turn 3.4s linear infinite;
+    opacity: 0.25;
+    animation: scanner-turn 8s linear infinite;
   }
 
   .minimap__sweep::after {
-    position: absolute;
-    right: 15%;
-    bottom: 0.1rem;
-    width: 0.25rem;
-    aspect-ratio: 1;
-    content: "";
-    border-radius: 50%;
-    background: var(--coral);
-    box-shadow: 0 0 0.6rem var(--coral);
+    display: none;
   }
 
   .minimap__player {
@@ -1629,7 +1622,8 @@
   }
 
   .minimap__rider--enemy {
-    animation: minimap-pulse 900ms ease-in-out infinite alternate;
+    border: 1px solid rgb(238 252 255 / 88%);
+    box-shadow: 0 0 0.42rem currentcolor;
   }
 
   .hud-footer-code {

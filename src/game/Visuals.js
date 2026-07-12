@@ -1135,12 +1135,13 @@ export function createTrailSegment(a, b, color = COLORS.cyan, height = 1.25) {
   const length = delta.length();
   const midpoint = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
   const material = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(color).multiplyScalar(0.55),
+    color: new THREE.Color(color).multiplyScalar(0.32),
     transparent: true,
-    opacity: 0.48,
+    opacity: 0.3,
     side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending,
+    blending: THREE.NormalBlending,
     depthWrite: false,
+    toneMapped: false,
   });
   const wall = new THREE.Mesh(new THREE.PlaneGeometry(length, height), material);
   wall.position.copy(midpoint);
@@ -1149,9 +1150,11 @@ export function createTrailSegment(a, b, color = COLORS.cyan, height = 1.25) {
   const edge = new THREE.Mesh(
     new THREE.BoxGeometry(length, 0.035, 0.035),
     new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color).multiplyScalar(0.82),
+      color: new THREE.Color(color).multiplyScalar(0.7),
       transparent: true,
-      opacity: 0.86,
+      opacity: 0.62,
+      depthWrite: false,
+      toneMapped: false,
     }),
   );
   edge.position.copy(midpoint);

@@ -27,9 +27,10 @@ const ARENA_HALF_METERS = 82;
 const AGGRESSION_GRACE_SECONDS = 8;
 const EMERGENCY_STOPS_PER_ROUND = 3;
 const EMERGENCY_STOP_SECONDS = 1.05;
-const DASHBOARD_STORAGE_KEY = 'digi-world:lightline-dashboard-height';
-const DASHBOARD_MIN = -0.2;
-const DASHBOARD_MAX = 0.28;
+const DASHBOARD_STORAGE_KEY = 'vector-protocol:lightcar-dashboard-height';
+const LEGACY_DASHBOARD_STORAGE_KEY = 'digi-world:lightline-dashboard-height';
+const DASHBOARD_MIN = -0.28;
+const DASHBOARD_MAX = 0.38;
 
 function applyDeadzone(value, threshold = 0.16) {
   const magnitude = Math.abs(value || 0);
@@ -39,12 +40,67 @@ function applyDeadzone(value, threshold = 0.16) {
 
 function loadDashboardHeight() {
   try {
-    const stored = window.localStorage.getItem(DASHBOARD_STORAGE_KEY);
+    const stored = window.localStorage.getItem(DASHBOARD_STORAGE_KEY)
+      ?? window.localStorage.getItem(LEGACY_DASHBOARD_STORAGE_KEY);
     const value = Number.parseFloat(stored);
-    return Number.isFinite(value) ? THREE.MathUtils.clamp(value, DASHBOARD_MIN, DASHBOARD_MAX) : 0;
+    if (!Number.isFinite(value)) return 0;
+    const height = THREE.MathUtils.clamp(value, DASHBOARD_MIN, DASHBOARD_MAX);
+    window.localStorage.setItem(DASHBOARD_STORAGE_KEY, height.toFixed(4));
+    return height;
   } catch {
     return 0;
   }
+}
+
+function createRivalMarker(role, color, registerTexture) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 384;
+  canvas.height = 112;
+  const context = canvas.getContext('2d');
+  const cssColor = `#${new THREE.Color(color).getHexString()}`;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.strokeStyle = cssColor;
+  context.lineWidth = 7;
+  context.shadowColor = cssColor;
+  context.shadowBlur = 12;
+  context.beginPath();
+  context.moveTo(14, 56);
+  context.lineTo(48, 18);
+  context.lineTo(88, 18);
+  context.moveTo(14, 56);
+  context.lineTo(48, 94);
+  context.lineTo(88, 94);
+  context.moveTo(370, 56);
+  context.lineTo(336, 18);
+  context.lineTo(296, 18);
+  context.moveTo(370, 56);
+  context.lineTo(336, 94);
+  context.lineTo(296, 94);
+  context.stroke();
+  context.shadowBlur = 0;
+  context.fillStyle = '#eaffff';
+  context.font = '700 28px monospace';
+  context.textAlign = 'center';
+  context.fillText(role, 192, 66);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  registerTexture(texture);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      opacity: 0.86,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  sprite.name = `rival-marker-${role.toLowerCase()}`;
+  sprite.position.set(0, 2.35, 0);
+  sprite.scale.set(4.8, 1.4, 1);
+  sprite.renderOrder = 40;
+  return sprite;
 }
 
 function saveDashboardHeight(value) {
@@ -102,6 +158,8 @@ export class BikeMode {
     this.braking = false;
     this.boosting = false;
     this.borders = [];
+    this.boundaryArchitecture = null;
+    this.markerTextures = [];
     this.cockpit = null;
     this.previousCameraFar = this.world.camera.far;
     this.world.camera.far = Math.max(this.world.camera.far, 260);
@@ -120,14 +178,16 @@ export class BikeMode {
   buildWorld() {
     this.environment = createEnvironment({ ar: this.world.presentation === 'ar' });
     this.root.add(this.environment);
+    if (this.environment.userData.panorama) this.environment.userData.panorama.material.opacity = 0.2;
+    if (this.environment.userData.stars) this.environment.userData.stars.material.opacity = 0.32;
     const ambient = new THREE.HemisphereLight(0xb9fdff, 0x05020a, 1.2);
     const key = new THREE.DirectionalLight(0xe9ffff, 2.6);
     key.position.set(-8, 18, 12);
     key.castShadow = true;
     key.shadow.mapSize.set(1024, 1024);
-    const red = new THREE.PointLight(COLORS.coral, 40, 45, 2);
+    const red = new THREE.PointLight(COLORS.coral, 18, 42, 2);
     red.position.set(-16, 7, -14);
-    const blue = new THREE.PointLight(COLORS.cyan, 46, 45, 2);
+    const blue = new THREE.PointLight(COLORS.cyan, 22, 42, 2);
     blue.position.set(15, 5, 14);
     this.root.add(ambient, key, red, blue);
     this.animatedLights = { red, blue };
@@ -161,56 +221,106 @@ export class BikeMode {
     outerGrid.material.opacity = 0.15;
     this.root.add(outerGrid);
 
-    const borderMaterial = new THREE.MeshBasicMaterial({ color: COLORS.cyan, transparent: true, opacity: 0.78 });
-    const borderLength = span;
-    for (let i = 0; i < 4; i += 1) {
-      const border = new THREE.Mesh(new THREE.BoxGeometry(borderLength, 0.08, 0.08), borderMaterial);
-      border.position.y = 0.08;
-      if (i < 2) {
-        border.position.z = (i ? 1 : -1) * (this.bounds + 0.8) * this.cellSize;
+    const boundary = new THREE.Group();
+    boundary.name = 'readable-square-arena-boundary';
+    const boundaryOffset = (this.bounds + 0.8) * this.cellSize;
+    const wallHeight = 5.4;
+    const wallMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0x02070b,
+      metalness: 0.72,
+      roughness: 0.38,
+      emissive: 0x05202a,
+      emissiveIntensity: 0.42,
+      transparent: true,
+      opacity: 0.62,
+      side: THREE.DoubleSide,
+      depthWrite: true,
+    });
+    const lowerRailMaterial = new THREE.MeshBasicMaterial({
+      color: COLORS.cyan,
+      transparent: true,
+      opacity: 0.62,
+      toneMapped: false,
+    });
+    const upperRailMaterial = new THREE.MeshBasicMaterial({
+      color: COLORS.ice,
+      transparent: true,
+      opacity: 0.52,
+      toneMapped: false,
+    });
+    const seamMaterial = new THREE.MeshBasicMaterial({
+      color: COLORS.violet,
+      transparent: true,
+      opacity: 0.34,
+      toneMapped: false,
+    });
+    for (let side = 0; side < 4; side += 1) {
+      const alongZ = side >= 2;
+      const sign = side === 0 || side === 2 ? -1 : 1;
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(span, wallHeight, 0.12), wallMaterial);
+      wall.position.y = wallHeight * 0.5;
+      if (alongZ) {
+        wall.rotation.y = Math.PI / 2;
+        wall.position.x = sign * boundaryOffset;
       } else {
-        border.rotation.y = Math.PI / 2;
-        border.position.x = (i === 2 ? -1 : 1) * (this.bounds + 0.8) * this.cellSize;
+        wall.position.z = sign * boundaryOffset;
       }
-      this.root.add(border);
-      this.borders.push(border);
+      boundary.add(wall);
+
+      for (const [height, material, thickness] of [
+        [0.12, lowerRailMaterial, 0.1],
+        [wallHeight * 0.53, seamMaterial, 0.045],
+        [wallHeight - 0.08, upperRailMaterial, 0.075],
+      ]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(span, thickness, 0.14), material);
+        rail.position.copy(wall.position);
+        rail.position.y = height;
+        rail.rotation.y = wall.rotation.y;
+        boundary.add(rail);
+        if (height === 0.12) this.borders.push(rail);
+      }
     }
 
-    for (let i = 0; i < 12; i += 1) {
-      const angle = (i / 12) * Math.PI * 2;
-      const radius = span * 0.76;
-      const pylon = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.22, 0.65, 6 + (i % 3) * 2.5, 6),
-        new THREE.MeshStandardMaterial({
-          color: 0x07101a,
-          metalness: 0.82,
-          roughness: 0.28,
-          emissive: i % 2 ? COLORS.violet : COLORS.cyan,
-          emissiveIntensity: 0.2,
-        }),
-      );
-      pylon.position.set(Math.sin(angle) * radius, pylon.geometry.parameters.height * 0.5 - 0.2, Math.cos(angle) * radius);
-      pylon.rotation.z = (i % 2 ? -1 : 1) * 0.08;
-      this.root.add(pylon);
+    const supportGeometry = new THREE.BoxGeometry(0.11, wallHeight, 0.11);
+    const supportMaterial = new THREE.MeshBasicMaterial({
+      color: COLORS.cyan,
+      transparent: true,
+      opacity: 0.36,
+      toneMapped: false,
+    });
+    const supportsPerSide = 13;
+    const supports = new THREE.InstancedMesh(supportGeometry, supportMaterial, supportsPerSide * 4);
+    supports.name = 'boundary-distance-supports';
+    const transform = new THREE.Matrix4();
+    let supportIndex = 0;
+    for (let side = 0; side < 4; side += 1) {
+      for (let index = 0; index < supportsPerSide; index += 1) {
+        const along = THREE.MathUtils.lerp(-boundaryOffset, boundaryOffset, index / (supportsPerSide - 1));
+        const x = side < 2 ? along : (side === 2 ? -boundaryOffset : boundaryOffset);
+        const z = side < 2 ? (side === 0 ? -boundaryOffset : boundaryOffset) : along;
+        transform.makeTranslation(x, wallHeight * 0.5, z);
+        supports.setMatrixAt(supportIndex++, transform);
+      }
     }
+    supports.instanceMatrix.needsUpdate = true;
+    boundary.add(supports);
 
-    for (const z of [-Math.round(this.bounds * 0.48), 0, Math.round(this.bounds * 0.48)]) {
-      const gate = new THREE.Group();
-      const left = new THREE.Mesh(
-        new THREE.BoxGeometry(0.14, 3.2, 0.14),
-        new THREE.MeshBasicMaterial({ color: z === 0 ? COLORS.violet : COLORS.cyan, toneMapped: false }),
-      );
-      left.position.set(-this.bounds * this.cellSize * 0.72, 1.6, z * this.cellSize);
-      const right = left.clone();
-      right.position.x *= -1;
-      const top = new THREE.Mesh(
-        new THREE.BoxGeometry(this.bounds * this.cellSize * 1.44, 0.08, 0.08),
-        left.material,
-      );
-      top.position.set(0, 3.18, z * this.cellSize);
-      gate.add(left, right, top);
-      this.root.add(gate);
+    const towerGeometry = new THREE.CylinderGeometry(0.42, 0.68, wallHeight + 2.6, 8);
+    for (const [x, z] of [
+      [-boundaryOffset, -boundaryOffset],
+      [boundaryOffset, -boundaryOffset],
+      [boundaryOffset, boundaryOffset],
+      [-boundaryOffset, boundaryOffset],
+    ]) {
+      const tower = new THREE.Mesh(towerGeometry, wallMaterial);
+      tower.position.set(x, (wallHeight + 2.6) * 0.5, z);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 8), upperRailMaterial);
+      cap.position.y = (wallHeight + 2.6) * 0.5;
+      tower.add(cap);
+      boundary.add(tower);
     }
+    this.root.add(boundary);
+    this.boundaryArchitecture = boundary;
   }
 
   buildCockpit() {
@@ -549,6 +659,44 @@ export class BikeMode {
     }
     cockpitBody.add(instrumentRig);
 
+    let tacticalMap = null;
+    if (this.world.presentation === 'vr' || this.world.requestedPresentation === 'vr') {
+      const mapCanvas = document.createElement('canvas');
+      mapCanvas.width = 256;
+      mapCanvas.height = 256;
+      const mapTexture = new THREE.CanvasTexture(mapCanvas);
+      mapTexture.colorSpace = THREE.SRGBColorSpace;
+      mapTexture.minFilter = THREE.LinearFilter;
+      const mapGroup = new THREE.Group();
+      mapGroup.name = 'vr-cockpit-tactical-map';
+      mapGroup.position.set(0.5, -0.23, -0.83);
+      mapGroup.rotation.x = -0.08;
+      const mapBack = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.245, 0.245),
+        new THREE.MeshBasicMaterial({ color: 0x010609, transparent: true, opacity: 0.92 }),
+      );
+      const mapPanel = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.22, 0.22),
+        new THREE.MeshBasicMaterial({ map: mapTexture, transparent: true, toneMapped: false }),
+      );
+      mapPanel.position.z = 0.004;
+      const mapFrame = new THREE.Mesh(
+        new THREE.RingGeometry(0.119, 0.126, 4),
+        new THREE.MeshBasicMaterial({ color: COLORS.cyan, transparent: true, opacity: 0.58, toneMapped: false }),
+      );
+      mapFrame.rotation.z = Math.PI / 4;
+      mapFrame.position.z = 0.008;
+      mapGroup.add(mapBack, mapPanel, mapFrame);
+      cockpitBody.add(mapGroup);
+      tacticalMap = {
+        canvas: mapCanvas,
+        context: mapCanvas.getContext('2d'),
+        texture: mapTexture,
+        group: mapGroup,
+        lastPaint: -Infinity,
+      };
+    }
+
     const centerLine = tube(
       [
         new THREE.Vector3(0, -0.5, -0.46),
@@ -566,7 +714,8 @@ export class BikeMode {
     glow.position.set(0, -0.43, -0.92);
     cockpitBody.add(glow);
 
-    const linePositions = new Float32Array(72 * 6);
+    const speedLineCount = 26;
+    const linePositions = new Float32Array(speedLineCount * 6);
     const speedLineGeometry = new THREE.BufferGeometry();
     const speedLineAttribute = new THREE.BufferAttribute(linePositions, 3);
     speedLineAttribute.setUsage(THREE.DynamicDrawUsage);
@@ -574,16 +723,16 @@ export class BikeMode {
     const speedLines = new THREE.LineSegments(
       speedLineGeometry,
       new THREE.LineBasicMaterial({
-        color: COLORS.ice,
+        color: COLORS.cyan,
         transparent: true,
-        opacity: 0.18,
+        opacity: 0.025,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         toneMapped: false,
       }),
     );
     const speedLineData = [];
-    for (let index = 0; index < 72; index += 1) {
+    for (let index = 0; index < speedLineCount; index += 1) {
       speedLineData.push({
         x: (this.random() - 0.5) * 8,
         y: (this.random() - 0.45) * 4,
@@ -603,6 +752,7 @@ export class BikeMode {
     cockpit.userData.glow = glow;
     cockpit.userData.paintReadout = paintReadout;
     cockpit.userData.readout = { speed: -1, flux: -1, texture: displayTexture };
+    cockpit.userData.tacticalMap = tacticalMap;
     cockpit.userData.basePosition = new THREE.Vector3();
     this.speedLines = speedLines;
     this.speedLineData = speedLineData;
@@ -614,9 +764,9 @@ export class BikeMode {
     this.riders.length = 0;
     const playerStart = Math.round(this.bounds * 0.84);
     this.spawnRider({ id: 0, x: 0, z: playerStart, direction: 0, role: 'PLAYER' });
-    this.spawnRider({ id: 1, x: -Math.round(this.bounds * 0.46), z: Math.round(this.bounds * 0.37), direction: 0, role: 'TRAPPER' });
-    this.spawnRider({ id: 2, x: 0, z: -Math.round(this.bounds * 0.06), direction: 0, role: 'HUNTER' });
-    this.spawnRider({ id: 3, x: Math.round(this.bounds * 0.46), z: -Math.round(this.bounds * 0.49), direction: 0, role: 'ROGUE' });
+    this.spawnRider({ id: 1, x: -Math.round(this.bounds * 0.33), z: Math.round(this.bounds * 0.3), direction: 0, role: 'TRAPPER' });
+    this.spawnRider({ id: 2, x: 0, z: Math.round(this.bounds * 0.08), direction: 0, role: 'HUNTER' });
+    this.spawnRider({ id: 3, x: Math.round(this.bounds * 0.33), z: -Math.round(this.bounds * 0.15), direction: 0, role: 'ROGUE' });
   }
 
   spawnRider({ id, x, z, direction, role }) {
@@ -634,6 +784,21 @@ export class BikeMode {
       riderMesh.userData.limbs[0].rotation.x = -0.72;
       riderMesh.userData.limbs[1].rotation.x = -0.72;
       mesh.add(riderMesh);
+      const marker = createRivalMarker(role, color, (texture) => this.markerTextures.push(texture));
+      mesh.add(marker);
+      const beacon = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.025, 0.045, 1.4, 8),
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.28,
+          toneMapped: false,
+        }),
+      );
+      beacon.position.set(0, 1.45, 0);
+      mesh.add(beacon);
+      mesh.userData.marker = marker;
+      mesh.userData.beacon = beacon;
     }
     this.root.add(mesh);
     const rider = {
@@ -890,8 +1055,8 @@ export class BikeMode {
       trail.age += dt;
       if (trail.age > 8) {
         const opacity = Math.max(0, (trail.maxAge - trail.age) / 4);
-        trail.mesh.userData.wall.material.opacity = opacity * 0.48;
-        trail.mesh.userData.edge.material.opacity = opacity * 0.86;
+        trail.mesh.userData.wall.material.opacity = opacity * 0.3;
+        trail.mesh.userData.edge.material.opacity = opacity * 0.62;
         trail.mesh.userData.edge.material.transparent = true;
       }
       if (trail.age >= trail.maxAge) {
@@ -1127,6 +1292,73 @@ export class BikeMode {
     );
     this.world.pulseHaptics(0.8, 100);
     return true;
+  }
+
+  updateCockpitTacticalMap(force = false) {
+    const map = this.cockpit?.userData.tacticalMap;
+    if (!map || (!force && this.elapsed - map.lastPaint < 0.12)) return;
+    map.lastPaint = this.elapsed;
+
+    const { canvas, context, texture } = map;
+    const width = canvas.width;
+    const height = canvas.height;
+    const inset = 22;
+    const usable = width - inset * 2;
+    const toMap = (cellX, cellZ) => ({
+      x: inset + ((cellX + this.bounds) / (this.bounds * 2)) * usable,
+      y: inset + ((cellZ + this.bounds) / (this.bounds * 2)) * usable,
+    });
+
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = 'rgba(1, 7, 10, 0.98)';
+    context.fillRect(0, 0, width, height);
+    context.strokeStyle = 'rgba(88, 242, 255, 0.16)';
+    context.lineWidth = 1;
+    for (let index = 0; index <= 8; index += 1) {
+      const offset = inset + (usable * index) / 8;
+      context.beginPath();
+      context.moveTo(inset, offset);
+      context.lineTo(width - inset, offset);
+      context.moveTo(offset, inset);
+      context.lineTo(offset, height - inset);
+      context.stroke();
+    }
+    context.strokeStyle = '#58f2ff';
+    context.lineWidth = 4;
+    context.shadowColor = '#58f2ff';
+    context.shadowBlur = 8;
+    context.strokeRect(inset, inset, usable, usable);
+    context.shadowBlur = 0;
+    context.fillStyle = '#79bac0';
+    context.font = '600 12px monospace';
+    context.textAlign = 'left';
+    context.fillText('TACTICAL / N', inset, 15);
+
+    for (const rider of this.riders) {
+      if (!rider.alive) continue;
+      const point = toMap(rider.x, rider.z);
+      const vector = DIRECTIONS[rider.direction];
+      const cssColor = `#${new THREE.Color(rider.color).getHexString()}`;
+      context.strokeStyle = cssColor;
+      context.fillStyle = rider.id === 0 ? '#eaffff' : cssColor;
+      context.lineWidth = rider.id === 0 ? 4 : 3;
+      context.shadowColor = cssColor;
+      context.shadowBlur = rider.id === 0 ? 8 : 5;
+      context.beginPath();
+      context.moveTo(point.x, point.y);
+      context.lineTo(point.x + vector.x * 14, point.y + vector.z * 14);
+      context.stroke();
+      context.beginPath();
+      context.arc(point.x, point.y, rider.id === 0 ? 6 : 5, 0, Math.PI * 2);
+      context.fill();
+      context.shadowBlur = 0;
+      if (rider.id !== 0) {
+        context.font = '700 10px monospace';
+        context.textAlign = 'center';
+        context.fillText(rider.role.slice(0, 1), point.x, point.y - 9);
+      }
+    }
+    texture.needsUpdate = true;
   }
 
   updateRiderVisual(rider, dt = 1 / 60) {
@@ -1382,20 +1614,20 @@ export class BikeMode {
     if (this.speedLines) {
       const attribute = this.speedLines.geometry.attributes.position;
       this.speedLineData.forEach((line, index) => {
-        line.z += dt * player.speed * (boosting ? 2.8 : 1.65);
+        line.z += dt * player.speed * (boosting ? 2 : 1.25);
         if (line.z > -0.6) {
           line.z = -12 - this.random() * 10;
           line.x = (this.random() - 0.5) * 8;
           line.y = (this.random() - 0.45) * 4;
         }
-        const length = line.length * (boosting ? 4.2 : 1.8);
+        const length = line.length * (boosting ? 2.5 : 0.65);
         attribute.setXYZ(index * 2, line.x, line.y, line.z);
         attribute.setXYZ(index * 2 + 1, line.x, line.y, line.z - length);
       });
       attribute.needsUpdate = true;
       this.speedLines.material.opacity = THREE.MathUtils.damp(
         this.speedLines.material.opacity,
-        this.emergencyStopTimer > 0 ? 0.04 : boosting ? 0.62 : 0.17,
+        this.emergencyStopTimer > 0 ? 0.01 : boosting ? 0.22 : 0.025,
         5,
         dt,
       );
@@ -1423,8 +1655,8 @@ export class BikeMode {
     updateShockwaves(this.shockwaves, dt, this.world.camera);
     updateEnvironment(this.environment, this.elapsed, dt);
     if (this.animatedLights) {
-      this.animatedLights.blue.intensity = 38 + Math.sin(this.elapsed * 1.7) * 12;
-      this.animatedLights.red.intensity = 34 + Math.sin(this.elapsed * 1.3 + 1.4) * 10;
+      this.animatedLights.blue.intensity = 20 + Math.sin(this.elapsed * 1.7) * 2;
+      this.animatedLights.red.intensity = 16 + Math.sin(this.elapsed * 1.3 + 1.4) * 2;
     }
     this.score += dt * (boosting ? 28 : 10);
     const activeEnemies = this.riders.slice(1).filter((rider) => rider.alive).length;
@@ -1446,6 +1678,7 @@ export class BikeMode {
       bounds: this.bounds,
       riders: this.riders.filter((rider) => rider.alive).map((rider) => ({ id: rider.id, x: rider.x, z: rider.z, color: rider.color })),
     });
+    this.updateCockpitTacticalMap();
   }
 
   primaryStart() {
@@ -1516,7 +1749,7 @@ export class BikeMode {
         headLean: +this.headLean.toFixed(2),
         controllerLean: +this.controllerLean.toFixed(2),
       },
-      overheadMap: 'upper_right',
+      overheadMap: this.cockpit?.userData.tacticalMap ? 'upper_right_hud_and_vr_cockpit' : 'upper_right_hud',
       player: {
         cellX: player.x,
         cellZ: player.z,
@@ -1551,8 +1784,11 @@ export class BikeMode {
   dispose() {
     if (this.cockpit) {
       this.cockpit.userData.readout?.texture?.dispose();
+      this.cockpit.userData.tacticalMap?.texture?.dispose();
       disposeObject(this.cockpit);
     }
+    this.markerTextures.forEach((texture) => texture.dispose());
+    this.markerTextures.length = 0;
     this.world.camera.far = this.previousCameraFar;
     this.world.camera.updateProjectionMatrix();
     if (this.world.scene.fog && this.previousFogDensity !== null) {

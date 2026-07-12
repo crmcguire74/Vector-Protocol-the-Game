@@ -226,6 +226,10 @@ export class DigiWorld {
     this.xrSecondaryQueued = false;
     this.xrHitTestSource = null;
     this.xrAnchor = null;
+    this.xrBoundedReferenceSpace = null;
+    this.arBoundedFloor = null;
+    this.arBoundedFloorSignature = '';
+    this.arBoundedFloorMode = null;
     this.arReticle = null;
     this.arPlaced = false;
     this.arLastPoseMatrix = null;
@@ -732,6 +736,62 @@ export class DigiWorld {
     root.updateMatrixWorld(true);
   }
 
+  updateARBoundedFloor(frame, referenceSpace) {
+    const boundedSpace = this.xrBoundedReferenceSpace;
+    const mode = this.currentMode;
+    if (
+      !frame ||
+      !referenceSpace ||
+      !boundedSpace?.boundsGeometry?.length ||
+      !mode?.setBoundedFloorFootprint ||
+      (this.xrHitTestSource && !this.arPlaced)
+    ) return;
+    const pose = frame.getPose(boundedSpace, referenceSpace);
+    if (!pose) return;
+    mode.root.updateWorldMatrix(true, false);
+    const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
+    const vertices = Array.from(boundedSpace.boundsGeometry).map((vertex) => {
+      const point = new THREE.Vector3(vertex.x, vertex.y || 0, vertex.z).applyMatrix4(matrix);
+      mode.root.worldToLocal(point);
+      return { x: point.x, y: point.y, z: point.z };
+    });
+    if (vertices.length < 3) return;
+    const minX = Math.min(...vertices.map((vertex) => vertex.x));
+    const maxX = Math.max(...vertices.map((vertex) => vertex.x));
+    const minZ = Math.min(...vertices.map((vertex) => vertex.z));
+    const maxZ = Math.max(...vertices.map((vertex) => vertex.z));
+    const floorY = vertices.reduce((sum, vertex) => sum + vertex.y, 0) / vertices.length;
+    let signedArea = 0;
+    for (let index = 0; index < vertices.length; index += 1) {
+      const current = vertices[index];
+      const next = vertices[(index + 1) % vertices.length];
+      signedArea += current.x * next.z - next.x * current.z;
+    }
+    const footprint = {
+      source: 'webxr-bounded-floor',
+      vertices,
+      minX,
+      maxX,
+      minZ,
+      maxZ,
+      width: maxX - minX,
+      depth: maxZ - minZ,
+      centerX: (minX + maxX) * 0.5,
+      centerZ: (minZ + maxZ) * 0.5,
+      floorY,
+      area: Math.abs(signedArea) * 0.5,
+      signedArea: signedArea * 0.5,
+    };
+    const signature = vertices
+      .map((vertex) => `${vertex.x.toFixed(2)},${vertex.y.toFixed(2)},${vertex.z.toFixed(2)}`)
+      .join('|');
+    if (signature === this.arBoundedFloorSignature && mode === this.arBoundedFloorMode) return;
+    this.arBoundedFloorSignature = signature;
+    this.arBoundedFloorMode = mode;
+    this.arBoundedFloor = footprint;
+    mode.setBoundedFloorFootprint(footprint);
+  }
+
   updateARPlacement(frame) {
     if (this.presentation !== 'ar' || !frame || !this.currentMode) return;
     const referenceSpace = this.renderer.xr.getReferenceSpace();
@@ -740,9 +800,13 @@ export class DigiWorld {
     if (this.xrAnchor?.anchorSpace) {
       const anchorPose = frame.getPose(this.xrAnchor.anchorSpace, referenceSpace);
       if (anchorPose) this.applyARPose(anchorPose.transform);
+      this.updateARBoundedFloor(frame, referenceSpace);
       return;
     }
-    if (!this.xrHitTestSource || this.arPlaced) return;
+    if (!this.xrHitTestSource || this.arPlaced) {
+      this.updateARBoundedFloor(frame, referenceSpace);
+      return;
+    }
     const hit = frame.getHitTestResults(this.xrHitTestSource)[0];
     if (!hit) return;
     const pose = hit.getPose(referenceSpace);
@@ -753,6 +817,7 @@ export class DigiWorld {
     }
     this.applyARPose(pose.transform);
     this.arPlaced = true;
+    this.updateARBoundedFloor(frame, referenceSpace);
     if (this.arReticle) this.arReticle.visible = false;
     this.announce(this.currentMode.name === 'bike' ? 'TABLETOP GRID ANCHORED' : 'ROOM BREACH ANCHORED', 1.5);
     if (typeof hit.createAnchor === 'function') {
@@ -768,6 +833,10 @@ export class DigiWorld {
     this.xrHitTestSource = null;
     this.xrAnchor?.delete?.();
     this.xrAnchor = null;
+    this.xrBoundedReferenceSpace = null;
+    this.arBoundedFloor = null;
+    this.arBoundedFloorSignature = '';
+    this.arBoundedFloorMode = null;
     this.arPlaced = false;
     this.arLastPoseMatrix = null;
     if (this.arReticle) {
@@ -908,6 +977,7 @@ export class DigiWorld {
       ? {
           optionalFeatures: [
             'local-floor',
+            'bounded-floor',
             'hit-test',
             'anchors',
             'plane-detection',
@@ -932,7 +1002,17 @@ export class DigiWorld {
     this.xrCapabilities.activeFeatures = Array.from(session.enabledFeatures || []);
     this.renderer.xr.setFoveation?.(0.85);
     this.ui.xrExit.classList.remove('hidden');
-    if (isAR) this.setupARPlacement(session);
+    if (isAR) {
+      try {
+        const boundedSpace = await session.requestReferenceSpace('bounded-floor');
+        if (session === this.xrSession && boundedSpace?.boundsGeometry?.length >= 3) {
+          this.xrBoundedReferenceSpace = boundedSpace;
+        }
+      } catch (error) {
+        console.info('[Vector Protocol] Bounded-floor fallback:', error.message);
+      }
+      this.setupARPlacement(session);
+    }
     return true;
   }
 
@@ -1009,7 +1089,9 @@ export class DigiWorld {
     this.currentMode = gameMode === 'bike'
       ? new BikeMode(this)
       : new ArenaMode(this, { roomPreset: this.roomPreset });
-    this.afterimagePass.enabled = gameMode === 'bike' && this.presentation === 'desktop';
+    // Persistent light walls provide the motion history. A full-frame afterimage
+    // obscures rivals and arena boundaries and is especially uncomfortable in XR.
+    this.afterimagePass.enabled = false;
     if (this.presentation === 'ar' && this.arLastPoseMatrix) {
       this.applyARPose({ matrix: this.arLastPoseMatrix.elements });
     }
@@ -1332,7 +1414,22 @@ export class DigiWorld {
       requestedPresentation: this.requestedPresentation,
       gameMode: this.gameMode,
       roomPreset: this.roomPreset,
-      xr: this.xrCapabilities,
+      xr: {
+        ...this.xrCapabilities,
+        boundedFloor: this.arBoundedFloor
+          ? {
+              source: this.arBoundedFloor.source,
+              width: +this.arBoundedFloor.width.toFixed(2),
+              depth: +this.arBoundedFloor.depth.toFixed(2),
+              area: +this.arBoundedFloor.area.toFixed(2),
+              vertices: this.arBoundedFloor.vertices.map((vertex) => ({
+                x: +vertex.x.toFixed(2),
+                y: +vertex.y.toFixed(2),
+                z: +vertex.z.toFixed(2),
+              })),
+            }
+          : null,
+      },
       audio: {
         music: this.audio.musicEnabled ? 'on' : 'off',
         track: this.audio.musicTrack,
@@ -1340,7 +1437,7 @@ export class DigiWorld {
       hud: this.lastHUD,
       gameplay: this.currentMode?.getState() || null,
       controls: this.currentMode?.name === 'bike'
-        ? 'A/D turn, Space boost, Shift brake, Q toggle lightline, E disruption pulse, M music, P/Escape pause, F fullscreen'
+        ? 'A/D turn, Space/trigger boost, Shift brake, X emergency stop (3), Q toggle lightline, E disruption pulse, PageUp/PageDown or [/] dashboard height, M music, P/Escape pause, F fullscreen'
         : 'WASD move, mouse aim, hold/release LMB throw, RMB guard/parry, Space jump, Shift dash, Q/E recall, M music, P/Escape pause, F fullscreen',
     };
   }
