@@ -89,7 +89,9 @@ export class ArenaMode {
   }
 
   buildWorld() {
-    this.environment = createEnvironment({ ar: this.world.presentation === 'ar' });
+    // AR, including its desktop spatial preview, uses the player's room as the
+    // environment. The digital cathedral is revealed only inside impact breaches.
+    this.environment = createEnvironment({ ar: this.isARPresentation });
     this.root.add(this.environment);
     const ambient = new THREE.HemisphereLight(COLORS.ice, 0x02040a, 1.45);
     const key = new THREE.DirectionalLight(0xd7ffff, 3.2);
@@ -428,13 +430,13 @@ export class ArenaMode {
       new THREE.MeshBasicMaterial({
         map: portalTexture,
         transparent: true,
-        opacity: 0.2,
+        opacity: 0,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       }),
     );
     portal.position.set(room.centerX, room.floorY + room.wallHeight * 0.5, config.z - 0.13);
-    portal.userData.baseOpacity = 0.2;
+    portal.userData.baseOpacity = 0;
     shell.add(portal);
     this.arPortal = portal;
 
@@ -444,7 +446,7 @@ export class ArenaMode {
         map: getCathedralTexture(),
         color: 0xa8d9ef,
         transparent: true,
-        opacity: 0.62,
+        opacity: 0,
         depthWrite: false,
       }),
     );
@@ -463,9 +465,10 @@ export class ArenaMode {
             metalness: 0.74,
             roughness: 0.25,
             transparent: true,
-            opacity: this.world.presentation === 'ar' ? 0.72 : 0.94,
+            opacity: this.isARPresentation ? 0.055 : 0.94,
             emissive: (row + column) % 3 === 0 ? COLORS.violet : COLORS.cyan,
-            emissiveIntensity: 0.05,
+            emissiveIntensity: this.isARPresentation ? 0.16 : 0.05,
+            depthWrite: false,
           }),
         );
         panel.position.set(
@@ -483,7 +486,12 @@ export class ArenaMode {
 
     const frame = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(totalWidth + 0.25, totalHeight + 0.25, 0.18)),
-      new THREE.LineBasicMaterial({ color: COLORS.cyan, transparent: true, opacity: 0.65 }),
+      new THREE.LineBasicMaterial({
+        color: COLORS.cyan,
+        transparent: true,
+        opacity: this.isARPresentation ? 0.24 : 0.65,
+        depthWrite: false,
+      }),
     );
     frame.position.set(room.centerX, room.floorY + room.wallHeight * 0.5, config.z + 0.03);
     shell.add(frame);
@@ -611,7 +619,7 @@ export class ArenaMode {
       enemy.position = rig.root.position;
       enemy.rig = rig;
     } catch (error) {
-      console.warn('[Digi World] Procedural Sentinel retained:', error.message);
+      console.warn('[Vector Protocol] Procedural Sentinel retained:', error.message);
     }
   }
 
@@ -743,7 +751,6 @@ export class ArenaMode {
       this.shockwaves.push(createShockwave(this.root, localPosition, COLORS.cyan));
     }
     this.fractureLevel += 1;
-    if (this.arPortal) this.arPortal.material.opacity = Math.min(0.94, 0.2 + this.fractureLevel * 0.1);
     this.world.announce(this.fractureLevel >= 5 ? 'THE ROOM IS OPEN' : `REALITY FRACTURE ${this.fractureLevel}`, 1.2);
     this.score += 50;
   }
@@ -1513,7 +1520,12 @@ export class ArenaMode {
   getState() {
     return {
       mode: 'disc_arena',
-      coordinateSystem: 'meters; origin at first platform centerline, +x right, +y up, -z forward from initial view',
+      spatialEnvironment: this.isARPresentation
+        ? (this.world.presentation === 'ar' ? 'live_room_passthrough' : 'room_scale_preview_no_imported_arena')
+        : 'digital_cathedral_platform_arena',
+      coordinateSystem: this.isARPresentation
+        ? 'meters in the mapped room footprint; +x right, +y up, -z forward from placement pose'
+        : 'meters; origin at first platform centerline, +x right, +y up, -z forward from initial view',
       wave: this.wave,
       player: {
         x: +this.player.position.x.toFixed(2),

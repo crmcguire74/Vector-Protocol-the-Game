@@ -41,23 +41,24 @@ npm run build
 - `A` / `D` or left/right arrows — queue a 90° turn
 - `Space` — boost
 - `Shift` — brake
+- `X` — use one of three emergency stops
 - `Q` — toggle the lightline
 - `E` — disruption pulse
+- `Page Up` / `Page Down` or `[` / `]` — adjust and save dashboard height
 
 ### Shared
 
 - `P`, `Enter`, or `Esc` — pause / resume
 - `F` — toggle fullscreen
+- `M` — toggle music
 
-In VR, a controller trigger charges/releases a shard or boosts the bike; grip guards/parries or fires the bike disruption pulse. Controller haptics are used when available.
+In VR, a controller trigger charges/releases a disc or boosts the bike; grip guards/parries or fires the bike disruption pulse. Lightline steering supports the left stick, headset lean, or two gripped controllers used as handlebars. A/X spends an emergency stop, B/Y toggles the lightline, and the right stick adjusts dashboard height. Controller haptics are used when available.
 
-## AR room presets
+## AR room mapping
 
-- **Portal** — a focused breakable wall aperture
-- **Arena** — a wider room shell
-- **Tabletop** — a compact scaled breach
+Immersive AR requests a WebXR `bounded-floor` reference space and transforms its polygon into the placed game root. That real polygon governs player support, Sentinel spawning and roaming, containment, and disc banks. If the device does not expose usable bounds, the menu offers explicit small, large, and compact room-size fallbacks.
 
-AR requests hit testing, anchors, plane detection, depth sensing, light estimation, and DOM overlay as optional capabilities. The core experience never assumes those features: preset virtual panels remain usable with a fixed local-space fallback. Disc impacts remove seeded shell fragments and expose a parallax digital world behind them.
+AR also requests hit testing, anchors, plane detection, depth sensing, light estimation, and DOM overlay as optional capabilities. The room remains the visible environment: only faint calibration lines are added before combat. Disc impacts create localized persistent wall/floor breaches that reveal the digital cathedral beneath the physical space.
 
 ## Testability
 
