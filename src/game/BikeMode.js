@@ -1882,6 +1882,16 @@ export class BikeMode {
     this.world.updateMinimap({
       bounds: this.bounds,
       riders: this.riders.filter((rider) => rider.alive).map((rider) => ({ id: rider.id, x: rider.x, z: rider.z, color: rider.color })),
+      trails: this.trails.map((trail) => ({
+        owner: trail.owner,
+        color: RIDER_COLORS[trail.owner],
+        age: trail.age,
+        maxAge: trail.maxAge,
+        ax: trail.ax,
+        az: trail.az,
+        bx: trail.bx,
+        bz: trail.bz,
+      })),
     });
     this.updateCockpitTacticalMap();
   }

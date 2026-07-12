@@ -1493,7 +1493,49 @@ export class DigiWorld {
     this.drawXRHUD({ mode, score, health: roundedHealth, resource: roundedResource, resourceLabel });
   }
 
-  updateMinimap({ bounds, riders }) {
+  updateMinimap({ bounds, riders, trails }) {
+    if (trails) {
+      if (!this.minimapTrailCanvas) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        canvas.className = 'minimap__trails';
+        canvas.setAttribute('aria-hidden', 'true');
+        this.ui.minimap.prepend(canvas);
+        this.minimapTrailCanvas = canvas;
+        this.minimapTrailContext = canvas.getContext('2d');
+      }
+      const context = this.minimapTrailContext;
+      const size = this.minimapTrailCanvas.width;
+      // Match the rider dots: left/top = 50% + (cell / bounds) * 43%.
+      const toMap = (cellX, cellZ) => ({
+        x: (0.5 + (cellX / bounds) * 0.43) * size,
+        y: (0.5 + (cellZ / bounds) * 0.43) * size,
+      });
+      context.clearRect(0, 0, size, size);
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.lineWidth = 3;
+      for (const trail of trails) {
+        const fade = trail.age > 8
+          ? Math.max(0, (trail.maxAge - trail.age) / (trail.maxAge - 8))
+          : 1;
+        if (fade <= 0) continue;
+        const cssColor = `#${new THREE.Color(trail.color).getHexString()}`;
+        const a = toMap(trail.ax, trail.az);
+        const b = toMap(trail.bx, trail.bz);
+        context.strokeStyle = cssColor;
+        context.shadowColor = cssColor;
+        context.shadowBlur = fade * 3;
+        context.globalAlpha = 0.25 + fade * 0.65;
+        context.beginPath();
+        context.moveTo(a.x, a.y);
+        context.lineTo(b.x, b.y);
+        context.stroke();
+      }
+      context.globalAlpha = 1;
+      context.shadowBlur = 0;
+    }
     const activeIds = new Set();
     for (const rider of riders) {
       activeIds.add(rider.id);
@@ -1520,6 +1562,14 @@ export class DigiWorld {
   clearMinimap() {
     for (const dot of this.minimapDots.values()) dot.remove();
     this.minimapDots.clear();
+    if (this.minimapTrailContext) {
+      this.minimapTrailContext.clearRect(
+        0,
+        0,
+        this.minimapTrailCanvas.width,
+        this.minimapTrailCanvas.height,
+      );
+    }
   }
 
   announce(message, duration = 1.5) {
