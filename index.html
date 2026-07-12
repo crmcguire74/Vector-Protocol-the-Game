@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta
       name="description"
-      content="Digi World — a cinematic WebXR disc-combat and light-cycle experience for desktop, VR, and AR."
+      content="VECTOR PROTOCOL — a cinematic WebXR disc-combat and lightcar experience for desktop, VR, and AR."
     />
     <meta name="theme-color" content="#02050a" />
-    <title>Digi World — Enter the Breach</title>
+    <title>VECTOR PROTOCOL — Enter the Breach</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -16,7 +16,7 @@
 
     <canvas
       id="game-canvas"
-      aria-label="Digi World interactive 3D viewport"
+      aria-label="VECTOR PROTOCOL interactive 3D viewport"
       aria-describedby="desktop-controls"
     ></canvas>
 
@@ -27,23 +27,23 @@
       <div class="ambient-chrome__grain"></div>
     </div>
 
-    <div id="loading-screen" role="status" aria-live="polite" aria-label="Initializing Digi World">
+    <div id="loading-screen" role="status" aria-live="polite" aria-label="Initializing VECTOR PROTOCOL">
       <div class="boot-sequence">
         <div class="boot-sigil" aria-hidden="true">
           <span></span><span></span><span></span>
         </div>
-        <p class="boot-kicker">D/W SYSTEM // 7.11</p>
+        <p class="boot-kicker">V/P SYSTEM // 7.12</p>
         <p class="boot-title">OPENING THE BREACH</p>
         <div class="boot-meter" aria-hidden="true"><i></i></div>
         <p class="boot-status">Calibrating spatial lattice</p>
       </div>
     </div>
 
-    <main id="menu" class="screen" aria-label="Digi World main menu">
+    <main id="menu" class="screen" aria-label="VECTOR PROTOCOL main menu">
       <header class="menu-topline">
-        <div class="wordmark" aria-label="Digi World">
+        <div class="wordmark" aria-label="VECTOR PROTOCOL">
           <span class="wordmark__mark" aria-hidden="true"></span>
-          <span>D/W</span>
+          <span>V/P</span>
         </div>
         <p><span class="live-pip" aria-hidden="true"></span> Lattice online</p>
         <p class="menu-topline__coordinates">SECTOR 07 / NODE 11 / <span>UNBOUND</span></p>
@@ -53,8 +53,8 @@
         <section class="hero-copy" aria-labelledby="game-title">
           <p class="section-index"><span>01</span> The fracture protocol</p>
           <h1 id="game-title">
-            <span class="title-digi">DIGI</span>
-            <span class="title-world">WORLD</span>
+            <span class="title-vector">VECTOR</span>
+            <span class="title-protocol">PROTOCOL</span>
           </h1>
           <p class="hero-copy__lede">
             The old grid is gone. Fight across its fragments, breach the room around you,
@@ -69,7 +69,7 @@
 
           <div class="hero-sigil" aria-hidden="true">
             <i></i><i></i><i></i><i></i>
-            <span>DW</span>
+            <span>VP</span>
           </div>
         </section>
 
@@ -79,7 +79,21 @@
               <p class="console-header__eyebrow">Mission configuration</p>
               <h2 id="deployment-heading">Choose your breach</h2>
             </div>
-            <span class="console-header__step">01—03</span>
+            <div class="console-header__tools">
+              <button
+                id="music-toggle"
+                class="music-toggle"
+                type="button"
+                aria-pressed="true"
+                aria-label="Turn music off"
+                title="Toggle music (M)"
+              >
+                <span class="music-toggle__pulse" aria-hidden="true"><i></i><i></i><i></i></span>
+                <span><small>Audio channel</small><strong id="music-toggle-label">Music on</strong></span>
+                <kbd>M</kbd>
+              </button>
+              <span class="console-header__step">01—03</span>
+            </div>
           </div>
 
           <fieldset class="control-group">
@@ -160,6 +174,99 @@
             </div>
           </fieldset>
 
+          <details class="instruction-console">
+            <summary>
+              <span id="instruction-heading" class="instruction-console__title"><span>03</span> Field manual</span>
+              <small>4 control profiles / open</small>
+            </summary>
+            <div class="instruction-console__body" aria-labelledby="instruction-heading">
+              <div class="instruction-tabs" role="tablist" aria-label="Gameplay instructions">
+              <button
+                id="instruction-tab-disc-vr"
+                class="instruction-tab"
+                type="button"
+                role="tab"
+                data-instruction="disc-vr"
+                aria-selected="false"
+                aria-controls="instruction-disc-vr"
+                tabindex="-1"
+              >Discs VR</button>
+              <button
+                id="instruction-tab-disc-ar"
+                class="instruction-tab"
+                type="button"
+                role="tab"
+                data-instruction="disc-ar"
+                aria-selected="false"
+                aria-controls="instruction-disc-ar"
+                tabindex="-1"
+              >Discs AR</button>
+              <button
+                id="instruction-tab-lightcars-vr"
+                class="instruction-tab"
+                type="button"
+                role="tab"
+                data-instruction="lightcars-vr"
+                aria-selected="false"
+                aria-controls="instruction-lightcars-vr"
+                tabindex="-1"
+              >Lightcars VR</button>
+              <button
+                id="instruction-tab-desktop"
+                class="instruction-tab is-selected"
+                type="button"
+                role="tab"
+                data-instruction="desktop"
+                aria-selected="true"
+                aria-controls="instruction-desktop"
+                tabindex="0"
+              >Desktop</button>
+              </div>
+              <div class="instruction-panels">
+              <article
+                id="instruction-disc-vr"
+                class="instruction-panel hidden"
+                role="tabpanel"
+                aria-labelledby="instruction-tab-disc-vr"
+                data-instruction-panel="disc-vr"
+              >
+                <strong>Discs / VR</strong>
+                <p>Move with the left stick and aim with either hand. Hold the trigger to charge, then release to throw. Grip guards; A/X jumps; B/Y recalls your disc. Stay inside your headset guardian.</p>
+              </article>
+              <article
+                id="instruction-disc-ar"
+                class="instruction-panel hidden"
+                role="tabpanel"
+                aria-labelledby="instruction-tab-disc-ar"
+                data-instruction-panel="disc-ar"
+              >
+                <strong>Discs / AR</strong>
+                <p>Map a clear play space, choose a room topology, and place the breach on a detected surface. Trigger throws and grip guards. Disc impacts fracture the mapped room and expose the Grid beneath it.</p>
+              </article>
+              <article
+                id="instruction-lightcars-vr"
+                class="instruction-panel hidden"
+                role="tabpanel"
+                aria-labelledby="instruction-tab-lightcars-vr"
+                data-instruction-panel="lightcars-vr"
+              >
+                <strong>Lightcars / VR</strong>
+                <p>Snap-turn with the left stick and look with your head. Trigger boosts; pull back to brake. A/X fires the disruption pulse, B/Y toggles the light wall, and grip also pulses.</p>
+              </article>
+              <article
+                id="instruction-desktop"
+                class="instruction-panel"
+                role="tabpanel"
+                aria-labelledby="instruction-tab-desktop"
+                data-instruction-panel="desktop"
+              >
+                <strong>Desktop</strong>
+                <p>Discs: WASD, mouse aim, hold/release click to throw, right-click guard, Space jump, Shift dash. Lightcars: A/D turn, Space boost, Shift brake, Q wall, E pulse. M toggles music; P/Esc pauses.</p>
+              </article>
+              </div>
+            </div>
+          </details>
+
           <div class="selection-readout" aria-live="polite">
             <span>Deploying</span>
             <strong><span id="selected-game-label">Shard Arena</span> / <span id="selected-reality-label">Normal</span></strong>
@@ -167,7 +274,7 @@
 
           <button id="launch-button" type="button">
             <span class="launch-button__index">03</span>
-            <span class="launch-button__copy"><small>System armed</small><strong>Enter Digi World</strong></span>
+            <span class="launch-button__copy"><small>System armed</small><strong>Enter Vector Protocol</strong></span>
             <span class="launch-button__arrow" aria-hidden="true">&rarr;</span>
           </button>
 
@@ -222,7 +329,7 @@
         <i class="minimap__player" aria-hidden="true"></i>
       </div>
 
-      <p class="hud-footer-code" aria-hidden="true">DW // LIVE THREAD // 07.11.89</p>
+      <p class="hud-footer-code" aria-hidden="true">VP // LIVE THREAD // 07.12.89</p>
     </section>
 
     <div id="announcement" class="hidden" role="status" aria-live="assertive"></div>
@@ -246,7 +353,7 @@
           <button id="restart-button" type="button"><span>Restart program</span><i aria-hidden="true">↻</i></button>
           <button id="exit-button" type="button"><span>Exit to lattice</span><i aria-hidden="true">×</i></button>
         </div>
-        <p class="modal-card__code">DW / HOLD STATE / NO SIGNAL LOSS</p>
+        <p class="modal-card__code">VP / HOLD STATE / NO SIGNAL LOSS</p>
       </div>
     </section>
 
@@ -261,7 +368,7 @@
         <p class="modal-card__eyebrow">Program report</p>
         <h2 id="result-title">Breach complete</h2>
         <p id="result-detail">The lattice has recorded your run.</p>
-        <div class="result-divider" aria-hidden="true"><i></i><span>DW</span><i></i></div>
+        <div class="result-divider" aria-hidden="true"><i></i><span>VP</span><i></i></div>
         <div class="modal-actions modal-actions--row">
           <button id="again-button" class="primary-action" type="button"><span>Run it again</span><i aria-hidden="true">↻</i></button>
           <button id="menu-button" type="button"><span>Main menu</span><i aria-hidden="true">⌂</i></button>

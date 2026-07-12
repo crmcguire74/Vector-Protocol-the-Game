@@ -23,6 +23,37 @@ const DIRECTIONS = [
 ];
 
 const RIDER_COLORS = [COLORS.cyan, COLORS.coral, COLORS.amber, COLORS.violet];
+const ARENA_HALF_METERS = 82;
+const AGGRESSION_GRACE_SECONDS = 8;
+const EMERGENCY_STOPS_PER_ROUND = 3;
+const EMERGENCY_STOP_SECONDS = 1.05;
+const DASHBOARD_STORAGE_KEY = 'digi-world:lightline-dashboard-height';
+const DASHBOARD_MIN = -0.2;
+const DASHBOARD_MAX = 0.28;
+
+function applyDeadzone(value, threshold = 0.16) {
+  const magnitude = Math.abs(value || 0);
+  if (magnitude <= threshold) return 0;
+  return Math.sign(value) * ((magnitude - threshold) / (1 - threshold));
+}
+
+function loadDashboardHeight() {
+  try {
+    const stored = window.localStorage.getItem(DASHBOARD_STORAGE_KEY);
+    const value = Number.parseFloat(stored);
+    return Number.isFinite(value) ? THREE.MathUtils.clamp(value, DASHBOARD_MIN, DASHBOARD_MAX) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveDashboardHeight(value) {
+  try {
+    window.localStorage.setItem(DASHBOARD_STORAGE_KEY, value.toFixed(4));
+  } catch {
+    // Persistence is an enhancement; restricted storage must not stop play.
+  }
+}
 
 export class BikeMode {
   constructor(world) {
@@ -34,7 +65,7 @@ export class BikeMode {
     this.world.scene.add(this.root);
     this.random = seededRandom(8484);
     this.cellSize = 1.22;
-    this.bounds = 18;
+    this.bounds = Math.round(ARENA_HALF_METERS / this.cellSize);
     this.originalBounds = this.bounds;
     this.occupancy = new Map();
     this.trails = [];
@@ -48,15 +79,42 @@ export class BikeMode {
     this.wave = 1;
     this.turnCooldown = 0;
     this.pulseCooldown = 0;
+    this.roundElapsed = 0;
+    this.aggressionGraceDuration = AGGRESSION_GRACE_SECONDS;
+    this.aggressionGraceRemaining = AGGRESSION_GRACE_SECONDS;
+    this.emergencyStopsRemaining = EMERGENCY_STOPS_PER_ROUND;
+    this.emergencyStopTimer = 0;
+    this.emergencyStopCooldown = 0;
+    this.dashboardHeight = loadDashboardHeight();
+    this.dashboardAdjustInput = 0;
+    this.steeringInput = 0;
+    this.steeringSource = 'neutral';
+    this.steerCharge = 0;
+    this.steerCooldown = 0;
+    this.headLean = 0;
+    this.controllerLean = 0;
+    this.leanCenterX = null;
+    this.controllerLeanCenter = null;
+    this.leanCalibrated = false;
+    this.standardPadEmergencyDown = false;
+    this.standardPadSteer = 0;
+    this.controllerTriggerBoost = false;
+    this.braking = false;
+    this.boosting = false;
     this.borders = [];
     this.cockpit = null;
+    this.previousCameraFar = this.world.camera.far;
+    this.world.camera.far = Math.max(this.world.camera.far, 260);
+    this.world.camera.updateProjectionMatrix();
+    this.previousFogDensity = this.world.scene.fog?.density ?? null;
+    if (this.world.scene.fog) this.world.scene.fog.density = Math.min(this.world.scene.fog.density, 0.0095);
     this.buildWorld();
-    if (this.isTabletopAR) this.root.scale.setScalar(0.08);
+    if (this.isTabletopAR) this.root.scale.setScalar(0.024);
     this.spawnRiders();
     if (!this.isTabletopAR) this.buildCockpit();
     this.world.setEyeHeight(0.88);
     this.world.setYaw(0);
-    this.world.announce('LIGHTLINE PURSUIT // OUTRUN THE GRID', 2.5);
+    this.world.announce('LIGHTLINE PURSUIT // 8 SECOND SAFE VECTOR', 2.5);
   }
 
   buildWorld() {
@@ -136,7 +194,7 @@ export class BikeMode {
       this.root.add(pylon);
     }
 
-    for (const z of [-11, 0, 11]) {
+    for (const z of [-Math.round(this.bounds * 0.48), 0, Math.round(this.bounds * 0.48)]) {
       const gate = new THREE.Group();
       const left = new THREE.Mesh(
         new THREE.BoxGeometry(0.14, 3.2, 0.14),
@@ -400,7 +458,7 @@ export class BikeMode {
 
     const instrumentRig = new THREE.Group();
     instrumentRig.name = 'floating-instrument-cluster';
-    instrumentRig.position.set(0, -0.29, -0.79);
+    instrumentRig.position.set(0, -0.29 + this.dashboardHeight, -0.79);
     instrumentRig.rotation.x = -0.12;
 
     const displayCanvas = document.createElement('canvas');
@@ -537,6 +595,7 @@ export class BikeMode {
     cockpit.userData.bodyRig = cockpitBody;
     cockpit.userData.handlebarRig = handlebarRig;
     cockpit.userData.instrumentRig = instrumentRig;
+    cockpit.userData.instrumentBaseY = -0.29;
     cockpit.userData.windscreen = windscreen;
     cockpit.userData.speedNeedle = speedNeedle;
     cockpit.userData.fluxNeedle = fluxNeedle;
@@ -553,10 +612,11 @@ export class BikeMode {
 
   spawnRiders() {
     this.riders.length = 0;
-    this.spawnRider({ id: 0, x: 0, z: 13, direction: 0, role: 'PLAYER' });
-    this.spawnRider({ id: 1, x: -12, z: -9, direction: 1, role: 'TRAPPER' });
-    this.spawnRider({ id: 2, x: 6, z: 3, direction: 2, role: 'HUNTER' });
-    this.spawnRider({ id: 3, x: -6, z: 8, direction: 1, role: 'ROGUE' });
+    const playerStart = Math.round(this.bounds * 0.84);
+    this.spawnRider({ id: 0, x: 0, z: playerStart, direction: 0, role: 'PLAYER' });
+    this.spawnRider({ id: 1, x: -Math.round(this.bounds * 0.46), z: Math.round(this.bounds * 0.37), direction: 0, role: 'TRAPPER' });
+    this.spawnRider({ id: 2, x: 0, z: -Math.round(this.bounds * 0.06), direction: 0, role: 'HUNTER' });
+    this.spawnRider({ id: 3, x: Math.round(this.bounds * 0.46), z: -Math.round(this.bounds * 0.49), direction: 0, role: 'ROGUE' });
   }
 
   spawnRider({ id, x, z, direction, role }) {
@@ -566,6 +626,7 @@ export class BikeMode {
     mesh.rotation.y = direction * -Math.PI / 2;
     if (id === 0) mesh.visible = this.isTabletopAR;
     if (id !== 0) {
+      mesh.scale.setScalar(1.18);
       const riderMesh = createHumanoid(color, role);
       riderMesh.scale.setScalar(0.34);
       riderMesh.position.set(0, 0.43, 0.25);
@@ -617,7 +678,7 @@ export class BikeMode {
     player.queuedTurn = amount;
   }
 
-  chooseAITurn(rider) {
+  chooseAITurn(rider, aggressive = this.aggressionGraceRemaining <= 0) {
     const candidates = [-1, 0, 1];
     let bestTurn = 0;
     let bestScore = -Infinity;
@@ -633,17 +694,17 @@ export class BikeMode {
       if (clear === 0) continue;
       let score = clear * 5 + this.random() * 7;
       if (turn === 0) score += 3;
-      if (rider.role === 'HUNTER' && player?.alive) {
+      if (aggressive && rider.role === 'HUNTER' && player?.alive) {
         const nextX = rider.x + vector.x * 3;
         const nextZ = rider.z + vector.z * 3;
         const before = Math.abs(rider.x - player.x) + Math.abs(rider.z - player.z);
         const after = Math.abs(nextX - player.x) + Math.abs(nextZ - player.z);
         score += (before - after) * 1.4;
       }
-      if (rider.role === 'TRAPPER' && player?.alive) {
+      if (aggressive && rider.role === 'TRAPPER' && player?.alive) {
         if (Math.abs(rider.x - player.x) < 5 || Math.abs(rider.z - player.z) < 5) score += turn === 0 ? -2 : 6;
       }
-      if (rider.role === 'ROGUE') score += this.random() * 10;
+      if (aggressive && rider.role === 'ROGUE') score += this.random() * 10;
       if (score > bestScore) {
         bestScore = score;
         bestTurn = turn;
@@ -702,11 +763,12 @@ export class BikeMode {
   }
 
   respawnPlayer(rider) {
+    const edge = Math.round(this.bounds * 0.82);
     const candidates = [
-      { x: 0, z: 13, direction: 0 },
-      { x: 13, z: 13, direction: 3 },
-      { x: -13, z: 13, direction: 1 },
-      { x: 0, z: -13, direction: 2 },
+      { x: 0, z: edge, direction: 0 },
+      { x: edge, z: edge, direction: 3 },
+      { x: -edge, z: edge, direction: 1 },
+      { x: 0, z: -edge, direction: 2 },
     ];
     const forwardClearance = (item) => {
       const direction = DIRECTIONS[item.direction];
@@ -754,7 +816,16 @@ export class BikeMode {
 
   stepRider(rider) {
     if (!rider.alive) return;
-    if (rider.id !== 0 && (rider.steps % 3 === 0 || this.random() < 0.07)) this.chooseAITurn(rider);
+    if (rider.id !== 0) {
+      const forward = DIRECTIONS[rider.direction];
+      const forwardBlocked = this.isBlocked(rider.x + forward.x, rider.z + forward.z);
+      if (this.aggressionGraceRemaining > 0) {
+        // During the opening read, rivals only turn to avoid an imminent crash.
+        if (forwardBlocked) this.chooseAITurn(rider, false);
+      } else if (rider.steps % 3 === 0 || this.random() < 0.07) {
+        this.chooseAITurn(rider, true);
+      }
+    }
     if (rider.queuedTurn !== 0) {
       rider.direction = (rider.direction + rider.queuedTurn + 4) % 4;
       rider.queuedTurn = 0;
@@ -850,6 +921,214 @@ export class BikeMode {
     });
   }
 
+  readStandardGamepad() {
+    const snapshot = {
+      steer: 0,
+      boost: false,
+      brake: false,
+      dashboardAdjust: 0,
+      emergencyPressed: false,
+    };
+    if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') return snapshot;
+    const xrGamepads = new Set(
+      (this.world.controllers || [])
+        .map((controller) => controller.userData.inputSource?.gamepad)
+        .filter(Boolean),
+    );
+    const gamepad = [...navigator.getGamepads()].find((candidate) => candidate?.connected && !xrGamepads.has(candidate));
+    if (!gamepad) {
+      this.standardPadEmergencyDown = false;
+      this.standardPadSteer = 0;
+      return snapshot;
+    }
+
+    const buttonValue = (index) => gamepad.buttons[index]?.value || 0;
+    const buttonPressed = (index) => Boolean(gamepad.buttons[index]?.pressed);
+    const emergencyDown = buttonPressed(0) || buttonPressed(2);
+    snapshot.emergencyPressed = emergencyDown && !this.standardPadEmergencyDown;
+    this.standardPadEmergencyDown = emergencyDown;
+    snapshot.boost = buttonValue(7) > 0.14;
+    snapshot.brake = buttonValue(6) > 0.14 || (gamepad.axes[1] || 0) > 0.72;
+    snapshot.steer = applyDeadzone(gamepad.axes[0] || 0, 0.18);
+    snapshot.dashboardAdjust = applyDeadzone(-(gamepad.axes[3] || 0), 0.22);
+    this.standardPadSteer = snapshot.steer;
+    return snapshot;
+  }
+
+  readXRMechanics() {
+    const snapshot = {
+      active: false,
+      triggerBoost: false,
+      brake: false,
+      stickSteer: 0,
+      dashboardAdjust: 0,
+      headLean: 0,
+      controllerLean: 0,
+    };
+    const immersiveVR = this.world.presentation === 'vr' && this.world.renderer.xr.isPresenting;
+    if (!immersiveVR) {
+      this.leanCenterX = null;
+      this.controllerLeanCenter = null;
+      this.leanCalibrated = false;
+      this.headLean = 0;
+      this.controllerLean = 0;
+      return snapshot;
+    }
+    snapshot.active = true;
+
+    const handed = {};
+    let unassigned = 0;
+    for (const controller of this.world.controllers || []) {
+      const source = controller.userData.inputSource;
+      const gamepad = source?.gamepad;
+      if (!source || !gamepad) continue;
+      let hand = source.handedness;
+      if (hand !== 'left' && hand !== 'right') hand = unassigned++ === 0 ? 'left' : 'right';
+      handed[hand] = { controller, gamepad };
+      snapshot.triggerBoost ||= (gamepad.buttons[0]?.value || 0) > 0.12;
+      const axes = gamepad.axes || [];
+      const x = axes.at(-2) || 0;
+      const y = axes.at(-1) || 0;
+      if (hand === 'left') {
+        snapshot.stickSteer = applyDeadzone(x, 0.16);
+        snapshot.brake ||= y > 0.58;
+      } else {
+        snapshot.dashboardAdjust = applyDeadzone(-y, 0.24);
+      }
+    }
+
+    this.world.cameraRig.updateWorldMatrix(true, false);
+    const xrCamera = this.world.renderer.xr.getCamera(this.world.camera);
+    xrCamera.updateWorldMatrix(true, false);
+    const headLocal = this.world.cameraRig.worldToLocal(xrCamera.getWorldPosition(new THREE.Vector3()));
+    if (this.leanCenterX === null) this.leanCenterX = headLocal.x;
+    snapshot.headLean = applyDeadzone(
+      THREE.MathUtils.clamp((headLocal.x - this.leanCenterX) / 0.3, -1, 1),
+      0.08,
+    );
+    this.leanCalibrated = true;
+
+    if (handed.left && handed.right) {
+      const leftLocal = this.world.cameraRig.worldToLocal(
+        handed.left.controller.getWorldPosition(new THREE.Vector3()),
+      );
+      const rightLocal = this.world.cameraRig.worldToLocal(
+        handed.right.controller.getWorldPosition(new THREE.Vector3()),
+      );
+      const heightDifference = rightLocal.y - leftLocal.y;
+      if (this.controllerLeanCenter === null) this.controllerLeanCenter = heightDifference;
+      const bothGripsHeld =
+        Boolean(handed.left.gamepad.buttons[1]?.pressed) &&
+        Boolean(handed.right.gamepad.buttons[1]?.pressed);
+      if (bothGripsHeld) {
+        snapshot.controllerLean = THREE.MathUtils.clamp(
+          -((heightDifference - this.controllerLeanCenter) / 0.3) * 0.45,
+          -1,
+          1,
+        );
+      }
+    }
+    this.headLean = snapshot.headLean;
+    this.controllerLean = snapshot.controllerLean;
+    return snapshot;
+  }
+
+  updateSteeringControls(dt, { keyboardTurn = 0, xrTurn = 0, xr, gamepad }) {
+    this.steerCooldown = Math.max(0, this.steerCooldown - dt);
+    let digitalTurn = keyboardTurn || xrTurn;
+    if (digitalTurn) {
+      this.queuePlayerTurn(digitalTurn);
+      this.steerCharge = 0;
+      this.steerCooldown = 0.24;
+      this.steeringSource = keyboardTurn ? 'keyboard' : 'xr_stick';
+    }
+
+    // Large stick deflections are handled by DigiWorld's snap-turn queue. Smaller
+    // deflections blend with calibrated headset/handlebar lean for charged turns.
+    const xrStick = Math.abs(xr.stickSteer) < 0.62 ? xr.stickSteer * 0.55 : 0;
+    const components = [
+      { source: 'head_lean', value: xr.headLean },
+      { source: 'controller_lean', value: xr.controllerLean },
+      { source: 'xr_stick', value: xrStick },
+      { source: 'gamepad_stick', value: gamepad.steer },
+    ];
+    const analogSteer = THREE.MathUtils.clamp(
+      components.reduce((sum, component) => sum + component.value, 0),
+      -1,
+      1,
+    );
+    if (!digitalTurn) {
+      if (Math.abs(analogSteer) > 0.045) {
+        this.steerCharge += analogSteer * dt * (0.65 + Math.abs(analogSteer) * 2.4);
+        const dominant = components.sort((a, b) => Math.abs(b.value) - Math.abs(a.value))[0];
+        this.steeringSource = dominant?.source || 'neutral';
+      } else {
+        this.steerCharge = THREE.MathUtils.damp(this.steerCharge, 0, 5, dt);
+        this.steeringSource = 'neutral';
+      }
+      if (this.steerCooldown <= 0 && Math.abs(this.steerCharge) >= 0.5) {
+        digitalTurn = this.steerCharge < 0 ? -1 : 1;
+        this.queuePlayerTurn(digitalTurn);
+        this.steerCharge = 0;
+        this.steerCooldown = 0.22;
+        this.world.pulseVignette();
+      }
+    }
+    const steeringTarget = digitalTurn || analogSteer;
+    this.steeringInput = THREE.MathUtils.damp(
+      this.steeringInput,
+      steeringTarget,
+      Math.abs(steeringTarget) > 0.02 ? 11 : 5,
+      dt,
+    );
+  }
+
+  updateDashboardHeight(dt, analogAdjust = 0) {
+    const keyboardAdjust =
+      (this.world.input.isDown('PageUp') || this.world.input.isDown('BracketRight') ? 1 : 0) -
+      (this.world.input.isDown('PageDown') || this.world.input.isDown('BracketLeft') ? 1 : 0);
+    this.dashboardAdjustInput = THREE.MathUtils.clamp(analogAdjust + keyboardAdjust, -1, 1);
+    if (Math.abs(this.dashboardAdjustInput) > 0.01) {
+      const previous = this.dashboardHeight;
+      this.dashboardHeight = THREE.MathUtils.clamp(
+        this.dashboardHeight + this.dashboardAdjustInput * dt * 0.32,
+        DASHBOARD_MIN,
+        DASHBOARD_MAX,
+      );
+      if (Math.abs(this.dashboardHeight - previous) > 0.0001) saveDashboardHeight(this.dashboardHeight);
+    }
+    const cockpitData = this.cockpit?.userData;
+    if (cockpitData?.instrumentRig) {
+      cockpitData.instrumentRig.position.y = THREE.MathUtils.damp(
+        cockpitData.instrumentRig.position.y,
+        cockpitData.instrumentBaseY + this.dashboardHeight,
+        12,
+        dt,
+      );
+    }
+  }
+
+  activateEmergencyStop() {
+    const player = this.riders[0];
+    if (
+      !player?.alive ||
+      this.emergencyStopsRemaining <= 0 ||
+      this.emergencyStopCooldown > 0 ||
+      this.emergencyStopTimer > 0
+    ) return false;
+    this.emergencyStopsRemaining -= 1;
+    this.emergencyStopTimer = EMERGENCY_STOP_SECONDS;
+    this.emergencyStopCooldown = 0.3;
+    const impact = this.cellWorld(player.x, player.z).add(new THREE.Vector3(0, 0.25, 0));
+    this.shockwaves.push(createShockwave(this.root, impact, COLORS.ice, true));
+    this.world.announce(
+      `EMERGENCY STOP // ${this.emergencyStopsRemaining} ${this.emergencyStopsRemaining === 1 ? 'CHARGE' : 'CHARGES'} LEFT`,
+      1,
+    );
+    this.world.pulseHaptics(0.8, 100);
+    return true;
+  }
+
   updateRiderVisual(rider, dt = 1 / 60) {
     const direction = DIRECTIONS[rider.direction];
     const x = (rider.x + direction.x * rider.progress) * this.cellSize;
@@ -867,7 +1146,13 @@ export class BikeMode {
       visual.turnImpulse = directionDelta === 1 ? 1 : directionDelta === 3 ? -1 : 0;
       visual.lastDirection = rider.direction;
     }
-    const steerSignal = THREE.MathUtils.clamp(rider.queuedTurn || visual.turnImpulse || 0, -1, 1);
+    const steerSignal = THREE.MathUtils.clamp(
+      rider.id === 0
+        ? this.steeringInput || rider.queuedTurn || visual.turnImpulse || 0
+        : rider.queuedTurn || visual.turnImpulse || 0,
+      -1,
+      1,
+    );
     visual.turnImpulse = THREE.MathUtils.damp(visual.turnImpulse || 0, 0, 5.5, frameDt);
     visual.lean = THREE.MathUtils.damp(
       visual.lean || 0,
@@ -1032,32 +1317,67 @@ export class BikeMode {
   update(dt) {
     this.elapsed += dt;
     if (this.world.phase !== 'running') return;
+    this.roundElapsed += dt;
     this.turnCooldown = Math.max(0, this.turnCooldown - dt);
     this.pulseCooldown = Math.max(0, this.pulseCooldown - dt);
+    this.emergencyStopTimer = Math.max(0, this.emergencyStopTimer - dt);
+    this.emergencyStopCooldown = Math.max(0, this.emergencyStopCooldown - dt);
+    const previousGrace = this.aggressionGraceRemaining;
+    this.aggressionGraceRemaining = Math.max(0, this.aggressionGraceRemaining - dt);
+    if (previousGrace > 0 && this.aggressionGraceRemaining === 0) {
+      this.world.announce('SAFE VECTOR ENDED // RIVAL AGGRESSION UNLOCKED', 1.6);
+    }
     const player = this.riders[0];
 
-    if (this.world.input.consumePress('KeyA') || this.world.input.consumePress('ArrowLeft')) this.queuePlayerTurn(-1);
-    if (this.world.input.consumePress('KeyD') || this.world.input.consumePress('ArrowRight')) this.queuePlayerTurn(1);
+    const gamepad = this.readStandardGamepad();
+    const xr = this.readXRMechanics();
+    const leftPressed = this.world.input.consumePress('KeyA') || this.world.input.consumePress('ArrowLeft');
+    const rightPressed = this.world.input.consumePress('KeyD') || this.world.input.consumePress('ArrowRight');
+    const keyboardTurn = leftPressed === rightPressed ? 0 : leftPressed ? -1 : 1;
     const xrTurn = this.world.consumeXRTurn();
-    if (xrTurn) this.queuePlayerTurn(xrTurn);
+    this.updateSteeringControls(dt, { keyboardTurn, xrTurn, xr, gamepad });
+
+    const keyboardEmergency = this.world.input.consumePress('KeyX');
+    const xrEmergency = this.world.consumeXRAction();
+    if (keyboardEmergency || xrEmergency || gamepad.emergencyPressed) this.activateEmergencyStop();
+
+    this.updateDashboardHeight(dt, xr.dashboardAdjust + gamepad.dashboardAdjust);
     if (this.world.input.consumePress('KeyQ') || this.world.consumeXRSecondary()) {
       player.trailOn = !player.trailOn;
       this.world.announce(player.trailOn ? 'LIGHTLINE ENGAGED' : 'LIGHTLINE SILENT', 0.75);
     }
     if (
       this.world.input.consumePress('KeyE') ||
-      this.world.input.consumePress('KeyB') ||
-      this.world.consumeXRAction()
+      this.world.input.consumePress('KeyB')
     ) this.clearWithPulse();
 
+    const boostRequested =
+      this.world.input.isDown('Space') ||
+      this.world.input.isDown('KeyW') ||
+      this.world.input.isDown('ArrowUp') ||
+      this.world.xrPrimaryHeld ||
+      this.world.xrStickBoost ||
+      xr.triggerBoost ||
+      gamepad.boost;
     const boosting =
-      (this.world.input.isDown('Space') || this.world.xrPrimaryHeld || this.world.xrStickBoost) &&
+      boostRequested &&
+      this.emergencyStopTimer <= 0 &&
       player.energy > 0 &&
       player.alive;
-    const braking = this.world.input.isDown('ShiftLeft') || this.world.input.isDown('ShiftRight') || this.world.xrBrake;
+    const braking =
+      this.world.input.isDown('ShiftLeft') ||
+      this.world.input.isDown('ShiftRight') ||
+      this.world.input.isDown('KeyS') ||
+      this.world.input.isDown('ArrowDown') ||
+      this.world.xrBrake ||
+      xr.brake ||
+      gamepad.brake;
+    this.controllerTriggerBoost = xr.triggerBoost || gamepad.boost;
+    this.boosting = boosting;
+    this.braking = braking && this.emergencyStopTimer <= 0;
     if (boosting) player.energy = Math.max(0, player.energy - dt * 27);
     else player.energy = Math.min(100, player.energy + dt * 13);
-    player.speed = boosting ? 11.2 : braking ? 4.9 : 7.7;
+    player.speed = this.emergencyStopTimer > 0 ? 0 : boosting ? 11.2 : braking ? 4.9 : 7.7;
 
     if (this.speedLines) {
       const attribute = this.speedLines.geometry.attributes.position;
@@ -1075,7 +1395,7 @@ export class BikeMode {
       attribute.needsUpdate = true;
       this.speedLines.material.opacity = THREE.MathUtils.damp(
         this.speedLines.material.opacity,
-        boosting ? 0.62 : 0.17,
+        this.emergencyStopTimer > 0 ? 0.04 : boosting ? 0.62 : 0.17,
         5,
         dt,
       );
@@ -1106,22 +1426,21 @@ export class BikeMode {
       this.animatedLights.blue.intensity = 38 + Math.sin(this.elapsed * 1.7) * 12;
       this.animatedLights.red.intensity = 34 + Math.sin(this.elapsed * 1.3 + 1.4) * 10;
     }
-    if (this.elapsed > 55 && this.bounds > 14) {
-      this.compressArena(14);
-      this.world.announce('GRID COMPRESSION // BOUNDARY CLOSING', 1.8);
-    }
-
     this.score += dt * (boosting ? 28 : 10);
     const activeEnemies = this.riders.slice(1).filter((rider) => rider.alive).length;
+    const pulseState = this.pulseCooldown <= 0 ? 'READY' : `${this.pulseCooldown.toFixed(1)}s`;
+    const aggressionState = this.aggressionGraceRemaining > 0
+      ? `SAFE VECTOR ${this.aggressionGraceRemaining.toFixed(1)}s`
+      : `LIGHTLINE ${player.trailOn ? 'LIVE' : 'OFF'}`;
     this.world.updateHUD({
       mode: 'LIGHTLINE PURSUIT',
       score: Math.round(this.score),
       health: player.health,
       resource: player.energy,
-      resourceLabel: `FLUX ${Math.round(player.energy)}% · PULSE ${this.pulseCooldown <= 0 ? 'READY' : this.pulseCooldown.toFixed(1) + 's'}`,
-      objective: `${activeEnemies} RUNNERS ACTIVE · LIGHTLINE ${player.trailOn ? 'LIVE' : 'OFF'}`,
-      combo: this.kills ? `${this.kills} ERASED` : '',
-      speed: `${Math.round(player.speed * this.cellSize * 14)} KPH`,
+      resourceLabel: `FLUX ${Math.round(player.energy)}% · STOPS ${this.emergencyStopsRemaining} · PULSE ${pulseState}`,
+      objective: `${activeEnemies} RUNNERS ACTIVE · ${aggressionState}`,
+      combo: this.emergencyStopTimer > 0 ? 'EMERGENCY HOLD' : this.kills ? `${this.kills} ERASED` : '',
+      speed: `${Math.round(player.speed * this.cellSize * 14)} KPH${this.emergencyStopTimer > 0 ? ' · STOP' : ''}`,
     });
     this.world.updateMinimap({
       bounds: this.bounds,
@@ -1139,6 +1458,15 @@ export class BikeMode {
 
   setShield(active) {
     if (active) this.clearWithPulse();
+  }
+
+  cancelInput() {
+    this.standardPadEmergencyDown = false;
+    this.steeringInput = 0;
+    this.steerCharge = 0;
+    this.controllerTriggerBoost = false;
+    this.boosting = false;
+    this.braking = false;
   }
 
   getState() {
@@ -1162,6 +1490,33 @@ export class BikeMode {
       coordinateSystem: `integer grid cells within ±${this.bounds}; +x east/right, +z south/back, north is -z`,
       elapsed: +this.elapsed.toFixed(1),
       arenaBounds: this.bounds,
+      arenaSizeMeters: +(this.bounds * this.cellSize * 2).toFixed(1),
+      aggressionGrace: {
+        duration: this.aggressionGraceDuration,
+        remaining: +this.aggressionGraceRemaining.toFixed(2),
+        active: this.aggressionGraceRemaining > 0,
+      },
+      emergencyStops: {
+        perRound: EMERGENCY_STOPS_PER_ROUND,
+        remaining: this.emergencyStopsRemaining,
+        active: this.emergencyStopTimer > 0,
+        activeFor: +this.emergencyStopTimer.toFixed(2),
+        cooldown: +this.emergencyStopCooldown.toFixed(2),
+      },
+      dashboard: {
+        height: +this.dashboardHeight.toFixed(3),
+        adjustment: +this.dashboardAdjustInput.toFixed(2),
+        persistent: true,
+      },
+      steering: {
+        source: this.steeringSource,
+        input: +this.steeringInput.toFixed(2),
+        charge: +this.steerCharge.toFixed(2),
+        vrLeanCalibrated: this.leanCalibrated,
+        headLean: +this.headLean.toFixed(2),
+        controllerLean: +this.controllerLean.toFixed(2),
+      },
+      overheadMap: 'upper_right',
       player: {
         cellX: player.x,
         cellZ: player.z,
@@ -1171,6 +1526,9 @@ export class BikeMode {
         flux: Math.round(player.energy),
         trailOn: player.trailOn,
         pulseCooldown: +this.pulseCooldown.toFixed(1),
+        boosting: this.boosting,
+        braking: this.braking,
+        emergencyStopped: this.emergencyStopTimer > 0,
         alive: player.alive,
         respawnIn: +Math.max(0, player.respawnTimer).toFixed(1),
       },
@@ -1194,6 +1552,11 @@ export class BikeMode {
     if (this.cockpit) {
       this.cockpit.userData.readout?.texture?.dispose();
       disposeObject(this.cockpit);
+    }
+    this.world.camera.far = this.previousCameraFar;
+    this.world.camera.updateProjectionMatrix();
+    if (this.world.scene.fog && this.previousFogDensity !== null) {
+      this.world.scene.fog.density = this.previousFogDensity;
     }
     this.world.setEyeHeight(1.65);
     this.world.clearMinimap();

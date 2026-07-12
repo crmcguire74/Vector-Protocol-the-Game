@@ -260,6 +260,208 @@ export function createPlatform(radius, height = 0, accent = COLORS.cyan, seed = 
   return root;
 }
 
+export function createRoomFootprint({
+  width = 6,
+  depth = 7,
+  floorY = 0,
+  centerX = 0,
+  centerZ = -1.2,
+  color = COLORS.cyan,
+} = {}) {
+  const root = new THREE.Group();
+  root.name = 'ar-room-footprint';
+  root.position.set(centerX, floorY, centerZ);
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(width, depth, Math.max(1, Math.round(width)), Math.max(1, Math.round(depth))),
+    new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color).multiplyScalar(0.3),
+      transparent: true,
+      opacity: 0.055,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+  floor.name = 'room-footprint-floor';
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = 0.004;
+  root.add(floor);
+
+  const halfWidth = width * 0.5;
+  const halfDepth = depth * 0.5;
+  const outlinePoints = [
+    new THREE.Vector3(-halfWidth, 0.025, -halfDepth),
+    new THREE.Vector3(halfWidth, 0.025, -halfDepth),
+    new THREE.Vector3(halfWidth, 0.025, halfDepth),
+    new THREE.Vector3(-halfWidth, 0.025, halfDepth),
+  ];
+  const outline = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints(outlinePoints),
+    new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.68,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  outline.name = 'room-footprint-boundary';
+  root.add(outline);
+
+  const guidePoints = [];
+  const columns = Math.max(2, Math.round(width));
+  const rows = Math.max(2, Math.round(depth));
+  for (let column = 1; column < columns; column += 1) {
+    const x = -halfWidth + (column / columns) * width;
+    guidePoints.push(x, 0.012, -halfDepth, x, 0.012, halfDepth);
+  }
+  for (let row = 1; row < rows; row += 1) {
+    const z = -halfDepth + (row / rows) * depth;
+    guidePoints.push(-halfWidth, 0.012, z, halfWidth, 0.012, z);
+  }
+  const guidesGeometry = new THREE.BufferGeometry();
+  guidesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(guidePoints, 3));
+  const guides = new THREE.LineSegments(
+    guidesGeometry,
+    new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.1,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  guides.name = 'room-footprint-grid';
+  root.add(guides);
+
+  const cornerMaterial = new THREE.LineBasicMaterial({
+    color: COLORS.ice,
+    transparent: true,
+    opacity: 0.38,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  for (const [x, z] of [
+    [-halfWidth, -halfDepth],
+    [halfWidth, -halfDepth],
+    [halfWidth, halfDepth],
+    [-halfWidth, halfDepth],
+  ]) {
+    const post = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(x, 0.02, z),
+        new THREE.Vector3(x, 0.62, z),
+      ]),
+      cornerMaterial,
+    );
+    root.add(post);
+  }
+
+  root.userData.floor = floor;
+  root.userData.outline = outline;
+  root.userData.guides = guides;
+  root.userData.width = width;
+  root.userData.depth = depth;
+  return root;
+}
+
+export function createRealityBreach(color = COLORS.cyan, radius = 0.68) {
+  const root = new THREE.Group();
+  root.name = 'persistent-reality-breach';
+
+  const aperture = new THREE.Mesh(
+    new THREE.CircleGeometry(radius * 0.91, 48),
+    new THREE.MeshBasicMaterial({
+      map: getCathedralTexture(),
+      color: 0x86c4db,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+    }),
+  );
+  aperture.position.z = -0.012;
+  aperture.renderOrder = 4;
+  root.add(aperture);
+
+  const depth = new THREE.Mesh(
+    new THREE.CircleGeometry(radius * 0.83, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0x01040a,
+      transparent: true,
+      opacity: 0.46,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  depth.position.z = -0.022;
+  depth.renderOrder = 3;
+  root.add(depth);
+
+  const halo = new THREE.Mesh(
+    new THREE.PlaneGeometry(radius * 2.75, radius * 2.75),
+    new THREE.MeshBasicMaterial({
+      map: glowTexture(`#${new THREE.Color(color).getHexString()}`),
+      color,
+      transparent: true,
+      opacity: 0.48,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    }),
+  );
+  halo.position.z = 0.006;
+  halo.renderOrder = 5;
+  root.add(halo);
+
+  const rim = new THREE.Mesh(
+    new THREE.RingGeometry(radius * 0.86, radius, 48),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.82,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  rim.position.z = 0.012;
+  rim.renderOrder = 6;
+  root.add(rim);
+
+  const edgePoints = [];
+  for (let index = 0; index < 32; index += 1) {
+    const angle = (index / 32) * Math.PI * 2;
+    const jag = radius * (0.98 + Math.sin(index * 7.13) * 0.055 + Math.sin(index * 2.31) * 0.035);
+    edgePoints.push(new THREE.Vector3(Math.cos(angle) * jag, Math.sin(angle) * jag, 0.02));
+  }
+  const edge = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints(edgePoints),
+    new THREE.LineBasicMaterial({
+      color: COLORS.ice,
+      transparent: true,
+      opacity: 0.92,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  edge.renderOrder = 7;
+  root.add(edge);
+
+  root.userData.radius = radius;
+  root.userData.aperture = aperture;
+  root.userData.rim = rim;
+  root.userData.halo = halo;
+  return root;
+}
+
 function armorMaterial(color) {
   return new THREE.MeshPhysicalMaterial({
     color: 0x59636a,
@@ -423,6 +625,9 @@ export function createHumanoid(color = COLORS.coral, role = 'STRIKER') {
 export function createDisc(color = COLORS.cyan, hostile = false) {
   const root = new THREE.Group();
   root.name = hostile ? 'hostile-arc-disc' : 'player-arc-disc';
+  const rotor = new THREE.Group();
+  rotor.name = 'horizontal-frisbee-rotor';
+  root.add(rotor);
   const shell = new THREE.Mesh(
     new THREE.CylinderGeometry(0.34, 0.34, 0.075, 12, 1, false),
     new THREE.MeshStandardMaterial({
@@ -434,22 +639,45 @@ export function createDisc(color = COLORS.cyan, hostile = false) {
       emissiveIntensity: 0.5,
     }),
   );
-  shell.rotation.x = Math.PI / 2;
-  root.add(shell);
+  shell.castShadow = true;
+  rotor.add(shell);
   const rim = new THREE.Mesh(
     new THREE.TorusGeometry(0.3, 0.055, 7, 32),
     new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(0.72) }),
   );
-  root.add(rim);
+  rim.rotation.x = Math.PI / 2;
+  rotor.add(rim);
   const core = new THREE.Mesh(
     new THREE.CircleGeometry(0.11, 12),
-    new THREE.MeshBasicMaterial({ color: 0xb8e6ea, transparent: true, opacity: 0.62 }),
+    new THREE.MeshBasicMaterial({
+      color: 0xb8e6ea,
+      transparent: true,
+      opacity: 0.72,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    }),
   );
-  core.position.z = 0.045;
-  root.add(core);
-  const glow = createGlow(color, 1.2, 0.42);
-  glow.position.z = 0.01;
-  root.add(glow);
+  core.rotation.x = -Math.PI / 2;
+  core.position.y = 0.041;
+  rotor.add(core);
+  const glow = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.08, 1.08),
+    new THREE.MeshBasicMaterial({
+      map: glowTexture(`#${new THREE.Color(color).getHexString()}`),
+      color,
+      transparent: true,
+      opacity: 0.48,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    }),
+  );
+  glow.rotation.x = -Math.PI / 2;
+  glow.position.y = 0.006;
+  rotor.add(glow);
+  root.userData.rotor = rotor;
+  root.userData.flightNormal = new THREE.Vector3(0, 1, 0);
   return root;
 }
 
@@ -459,12 +687,22 @@ export function createDiscTrail(color = COLORS.cyan, length = 28) {
   const attribute = new THREE.BufferAttribute(positions, 3);
   attribute.setUsage(THREE.DynamicDrawUsage);
   geometry.setAttribute('position', attribute);
+  const colors = new Float32Array(length * 3);
+  const baseColor = new THREE.Color(color);
+  for (let index = 0; index < length; index += 1) {
+    const brightness = Math.max(0.035, 1 - index / Math.max(1, length - 1));
+    colors[index * 3] = baseColor.r * brightness;
+    colors[index * 3 + 1] = baseColor.g * brightness;
+    colors[index * 3 + 2] = baseColor.b * brightness;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   const line = new THREE.Line(
     geometry,
     new THREE.LineBasicMaterial({
-      color,
+      color: 0xffffff,
+      vertexColors: true,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.78,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       toneMapped: false,
@@ -473,6 +711,23 @@ export function createDiscTrail(color = COLORS.cyan, length = 28) {
   line.frustumCulled = false;
   line.userData.history = [];
   line.userData.length = length;
+  const sparks = new THREE.Points(
+    geometry,
+    new THREE.PointsMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      size: 0.055,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0.52,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  sparks.userData.sharedGeometry = true;
+  line.add(sparks);
+  line.userData.sparks = sparks;
   return line;
 }
 
@@ -489,7 +744,7 @@ export function updateDiscTrail(line, position) {
   attribute.needsUpdate = true;
 }
 
-export function createShockwave(parent, position, color, horizontal = false) {
+export function createShockwave(parent, position, color, horizontal = false, normal = null) {
   const material = new THREE.MeshBasicMaterial({
     color,
     transparent: true,
@@ -501,9 +756,12 @@ export function createShockwave(parent, position, color, horizontal = false) {
   });
   const mesh = new THREE.Mesh(new THREE.RingGeometry(0.18, 0.24, 48), material);
   mesh.position.copy(position);
-  if (horizontal) mesh.rotation.x = -Math.PI / 2;
+  const oriented = Boolean(normal?.lengthSq?.());
+  if (oriented) {
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal.clone().normalize());
+  } else if (horizontal) mesh.rotation.x = -Math.PI / 2;
   parent.add(mesh);
-  return { mesh, life: 0.7, maxLife: 0.7, horizontal };
+  return { mesh, life: 0.7, maxLife: 0.7, horizontal, oriented };
 }
 
 export function updateShockwaves(shockwaves, dt, camera = null) {
@@ -513,7 +771,7 @@ export function updateShockwaves(shockwaves, dt, camera = null) {
     const progress = 1 - shockwave.life / shockwave.maxLife;
     shockwave.mesh.scale.setScalar(1 + progress * 8);
     shockwave.mesh.material.opacity = Math.max(0, (1 - progress) * 0.78);
-    if (!shockwave.horizontal && camera) {
+    if (!shockwave.horizontal && !shockwave.oriented && camera) {
       const cameraQuaternion = camera.getWorldQuaternion(new THREE.Quaternion());
       const parentQuaternion = shockwave.mesh.parent.getWorldQuaternion(new THREE.Quaternion());
       shockwave.mesh.quaternion.copy(parentQuaternion.invert().multiply(cameraQuaternion));

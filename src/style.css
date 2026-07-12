@@ -480,6 +480,7 @@
   .console-header__eyebrow,
   .control-group legend,
   .control-group > h3,
+  .instruction-console__title,
   .compatibility-note,
   .modal-card__eyebrow {
     color: var(--mist);
@@ -490,7 +491,8 @@
 
   .section-index span,
   .control-group legend span,
-  .control-group > h3 span {
+  .control-group > h3 span,
+  .instruction-console__title > span {
     margin-right: 0.7rem;
     color: var(--cyan);
   }
@@ -505,16 +507,17 @@
     line-height: 0.7;
   }
 
-  .title-digi {
-    font-size: clamp(5.3rem, 10vw, 10.5rem);
+  .title-vector {
+    font-size: clamp(4.4rem, 8.2vw, 8.7rem);
     text-shadow: 0 0 2.5rem rgb(88 242 255 / 12%);
   }
 
-  .title-world {
+  .title-protocol {
     align-self: flex-start;
-    margin-left: clamp(1.5rem, 6vw, 6.5rem);
+    margin-left: clamp(1.5rem, 4.5vw, 5rem);
     color: transparent;
-    font-size: clamp(3.2rem, 7vw, 7.3rem);
+    font-size: clamp(2.55rem, 5.25vw, 5.75rem);
+    letter-spacing: 0.015em;
     -webkit-text-stroke: 1px rgb(200 251 255 / 76%);
     text-shadow: 0 0 2.2rem rgb(88 242 255 / 20%);
   }
@@ -648,6 +651,94 @@
     color: var(--cyan-dim);
     font: 500 0.66rem/1 var(--mono);
     letter-spacing: 0.1em;
+  }
+
+  .console-header__tools {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+  }
+
+  .music-toggle {
+    display: grid;
+    grid-template-columns: 1.4rem auto auto;
+    gap: 0.55rem;
+    min-height: 2.55rem;
+    padding: 0.4rem 0.55rem;
+    align-items: center;
+    background: rgb(2 8 13 / 72%);
+    border: 1px solid rgb(88 242 255 / 24%);
+    color: #a5bbc1;
+    text-align: left;
+    transition: border-color 180ms ease, background 180ms ease, color 180ms ease;
+  }
+
+  .music-toggle:hover {
+    border-color: rgb(88 242 255 / 58%);
+    background: rgb(14 31 39 / 80%);
+    color: var(--cyan-hot);
+  }
+
+  .music-toggle > span:nth-child(2) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+  }
+
+  .music-toggle small {
+    color: #567077;
+    font: 500 0.4rem/1 var(--mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .music-toggle strong {
+    color: var(--cyan-hot);
+    font: 600 0.54rem/1 var(--display);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .music-toggle kbd {
+    min-width: 1.15rem;
+    padding: 0.25rem;
+    border: 1px solid rgb(88 242 255 / 20%);
+    color: #688087;
+    font: 500 0.46rem/1 var(--mono);
+    text-align: center;
+  }
+
+  .music-toggle__pulse {
+    display: flex;
+    height: 1rem;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 0.16rem;
+  }
+
+  .music-toggle__pulse i {
+    display: block;
+    width: 0.15rem;
+    height: 35%;
+    background: var(--cyan);
+    box-shadow: 0 0 0.45rem var(--cyan);
+    animation: audio-spectrum 0.72s ease-in-out infinite alternate;
+  }
+
+  .music-toggle__pulse i:nth-child(2) { height: 95%; animation-delay: -0.28s; }
+  .music-toggle__pulse i:nth-child(3) { height: 62%; animation-delay: -0.5s; }
+
+  .music-toggle[aria-pressed="false"] {
+    border-color: rgb(126 176 184 / 14%);
+    color: #657a80;
+  }
+
+  .music-toggle[aria-pressed="false"] strong { color: #71878d; }
+  .music-toggle[aria-pressed="false"] .music-toggle__pulse i {
+    height: 0.12rem;
+    background: #4d646a;
+    box-shadow: none;
+    animation-play-state: paused;
   }
 
   .control-group {
@@ -955,6 +1046,104 @@
   .is-selected .game-option__status,
   [aria-pressed="true"] .game-option__status { color: var(--cyan); }
 
+  .instruction-console {
+    margin-top: 1.05rem;
+    padding: 0.68rem 0.72rem;
+    background:
+      linear-gradient(90deg, rgb(88 242 255 / 4%), transparent 48%),
+      rgb(1 5 9 / 44%);
+    border: 1px solid rgb(117 225 235 / 15%);
+  }
+
+  .instruction-console summary {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .instruction-console summary::-webkit-details-marker { display: none; }
+
+  .instruction-console summary::after {
+    content: "+";
+    color: var(--cyan);
+    font: 500 0.72rem/1 var(--mono);
+    text-shadow: 0 0 0.6rem var(--cyan);
+  }
+
+  .instruction-console[open] summary::after { content: "−"; }
+
+  .instruction-console__body {
+    margin-top: 0.58rem;
+  }
+
+  .instruction-console summary small {
+    margin-left: auto;
+    color: #536a71;
+    font: 500 0.43rem/1 var(--mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .instruction-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1px;
+    background: rgb(88 242 255 / 13%);
+    border: 1px solid rgb(88 242 255 / 13%);
+  }
+
+  .instruction-tab {
+    min-width: 0;
+    min-height: 2rem;
+    padding: 0.45rem 0.35rem;
+    overflow: hidden;
+    background: #040b11;
+    color: #698087;
+    font: 600 0.46rem/1 var(--mono);
+    letter-spacing: 0.035em;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+    transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+  }
+
+  .instruction-tab:hover {
+    background: rgb(14 31 39 / 92%);
+    color: #a9c0c6;
+  }
+
+  .instruction-tab.is-selected,
+  .instruction-tab[aria-selected="true"] {
+    position: relative;
+    z-index: 1;
+    background: linear-gradient(145deg, rgb(21 60 68 / 75%), rgb(5 14 20 / 96%));
+    color: var(--cyan-hot);
+    box-shadow: inset 0 -1px var(--cyan), 0 0 1rem rgb(88 242 255 / 7%);
+  }
+
+  .instruction-panels {
+    min-height: 4.2rem;
+    padding: 0.65rem 0.7rem 0.15rem;
+  }
+
+  .instruction-panel strong {
+    display: block;
+    margin-bottom: 0.3rem;
+    color: var(--cyan);
+    font: 600 0.54rem/1 var(--display);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .instruction-panel p {
+    color: #83989e;
+    font: 500 0.51rem/1.55 var(--mono);
+    letter-spacing: 0.015em;
+  }
+
   .selection-readout {
     display: flex;
     margin-top: 1.15rem;
@@ -1087,6 +1276,16 @@
   .deployment-console:has(#preset-picker:not(.hidden)) .game-option {
     min-height: 4.55rem;
     padding-block: 0.58rem;
+  }
+
+  .deployment-console:has(#preset-picker:not(.hidden)) .instruction-console {
+    margin-top: 0.65rem;
+    padding: 0.55rem;
+  }
+
+  .deployment-console:has(#preset-picker:not(.hidden)) .instruction-panels {
+    min-height: 3.7rem;
+    padding-top: 0.5rem;
   }
 
   .deployment-console:has(#preset-picker:not(.hidden)) .selection-readout {
@@ -1732,6 +1931,7 @@
 
   @keyframes sigil-turn { to { transform: rotate(360deg); } }
   @keyframes live-pulse { 50% { opacity: 0.28; box-shadow: 0 0 0.2rem var(--cyan); } }
+  @keyframes audio-spectrum { to { height: 100%; opacity: 0.55; } }
   @keyframes scanner-turn { to { transform: rotate(360deg); } }
 
   @keyframes combo-pop {
@@ -1766,8 +1966,8 @@
       gap: 2.4rem;
     }
 
-    .title-digi { font-size: clamp(4.5rem, 9vw, 7rem); }
-    .title-world { font-size: clamp(2.8rem, 6vw, 5rem); }
+    .title-vector { font-size: clamp(3.8rem, 7.4vw, 6.2rem); }
+    .title-protocol { font-size: clamp(2.35rem, 4.8vw, 4.2rem); }
     .presentation-option { grid-template-columns: 1.8rem 1fr; }
     .option-icon { width: 1.6rem; }
     .option-index { display: none; }
@@ -1803,8 +2003,8 @@
       line-height: 0.82;
     }
 
-    .title-digi { font-size: clamp(4rem, 17vw, 7rem); }
-    .title-world { margin-left: 0.3em; font-size: clamp(2.6rem, 12vw, 5rem); }
+    .title-vector { font-size: clamp(3.7rem, 15vw, 6.5rem); }
+    .title-protocol { margin-left: 0.3em; font-size: clamp(2.35rem, 9.5vw, 4.3rem); }
     .hero-copy__lede { max-width: 36rem; margin-left: 3.4rem; }
     .hero-metrics { width: calc(100% - 3.4rem); margin: 1.5rem 0 0 3.4rem; }
     .hero-sigil { display: none; }
@@ -1827,6 +2027,9 @@
     .hero-metrics { width: 100%; margin-left: 0; }
     .deployment-console { padding: 1rem; }
     .console-header__step { display: none; }
+    .console-header__tools { gap: 0; }
+    .music-toggle { grid-template-columns: 1.2rem auto; }
+    .music-toggle kbd { display: none; }
     .presentation-grid { grid-template-columns: 1fr; }
     .presentation-option { grid-template-columns: 2.2rem 1fr auto; min-height: 3.75rem; }
     .option-icon { width: 2rem; }
@@ -1837,6 +2040,8 @@
     .game-option { grid-template-columns: 3rem minmax(0, 1fr); min-height: 5rem; }
     .game-glyph { width: 2.65rem; }
     .game-glyph--bike::after { box-shadow: 1.45rem 0 0 -0.16rem var(--panel-solid), 1.45rem 0 0 0 #90eaf0; }
+    .instruction-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .instruction-console summary small { display: none; }
     .selection-readout { align-items: flex-start; flex-direction: column; gap: 0.3rem; }
     .controls-strip li:nth-child(n + 5) { display: none; }
 
@@ -1854,6 +2059,8 @@
     .presentation-option:hover,
     .preset-option:hover,
     .game-option:hover,
+    .instruction-tab:hover,
+    .music-toggle:hover,
     #launch-button:hover,
     .modal-actions button:hover {
       transform: none;
@@ -1881,6 +2088,8 @@
     .presentation-option,
     .preset-option,
     .game-option,
+    .instruction-tab,
+    .music-toggle,
     .modal-actions button { border-color: rgb(200 251 255 / 48%); }
   }
 }

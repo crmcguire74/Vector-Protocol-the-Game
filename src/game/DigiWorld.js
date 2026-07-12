@@ -49,11 +49,42 @@ class ProceduralAudio {
     this.context = null;
     this.master = null;
     this.drone = null;
+    this.musicTrack = 'hub';
+    this.musicUnlocked = false;
+    this.musicUnavailable = new Set();
+    try {
+      this.musicEnabled = window.localStorage.getItem('vector-protocol.music') !== 'off';
+    } catch {
+      this.musicEnabled = true;
+    }
+    this.music = typeof Audio === 'undefined'
+      ? {}
+      : {
+          hub: this.createMusicTrack('hub', '/assets/audio/mus_hub.m4a', 0.18),
+          combat: this.createMusicTrack('combat', '/assets/audio/mus_combat.m4a', 0.2),
+        };
+  }
+
+  createMusicTrack(id, source, volume) {
+    const track = new Audio();
+    track.src = source;
+    track.loop = true;
+    track.preload = 'auto';
+    track.volume = volume;
+    track.addEventListener('error', () => {
+      this.musicUnavailable.add(id);
+      track.pause();
+    }, { once: true });
+    return track;
   }
 
   unlock() {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
+    this.musicUnlocked = true;
+    if (!AudioContext) {
+      this.syncMusic();
+      return;
+    }
     if (!this.context) {
       this.context = new AudioContext();
       this.master = this.context.createGain();
@@ -61,6 +92,50 @@ class ProceduralAudio {
       this.master.connect(this.context.destination);
     }
     if (this.context.state === 'suspended') this.context.resume();
+    this.syncMusic();
+  }
+
+  setMusicEnabled(enabled) {
+    this.musicEnabled = Boolean(enabled);
+    try {
+      window.localStorage.setItem('vector-protocol.music', this.musicEnabled ? 'on' : 'off');
+    } catch {
+      // Persistence is optional in private/embedded browsing contexts.
+    }
+    if (this.musicEnabled) this.syncMusic();
+    else {
+      this.pauseMusic();
+      this.stopDrone();
+    }
+    return this.musicEnabled;
+  }
+
+  setMusicTrack(id) {
+    if (!this.music[id]) return;
+    if (this.musicTrack !== id) {
+      this.pauseMusic();
+      this.musicTrack = id;
+      try {
+        this.music[id].currentTime = 0;
+      } catch {
+        // Some browsers disallow seeking until media metadata is available.
+      }
+    }
+    this.syncMusic();
+  }
+
+  syncMusic() {
+    this.pauseMusic(this.musicTrack);
+    if (!this.musicEnabled || !this.musicUnlocked || this.musicUnavailable.has(this.musicTrack)) return;
+    const active = this.music[this.musicTrack];
+    if (!active || !active.paused) return;
+    active.play()?.catch?.(() => {});
+  }
+
+  pauseMusic(except = null) {
+    Object.entries(this.music).forEach(([id, track]) => {
+      if (id !== except && !track.paused) track.pause();
+    });
   }
 
   tone({ frequency = 220, endFrequency = frequency, duration = 0.12, gain = 0.06, type = 'sine' } = {}) {
@@ -81,7 +156,7 @@ class ProceduralAudio {
   }
 
   startDrone() {
-    if (!this.context || !this.master || this.drone) return;
+    if (!this.musicEnabled || !this.context || !this.master || this.drone) return;
     const bus = this.context.createGain();
     const filter = this.context.createBiquadFilter();
     bus.gain.value = 0.025;
@@ -203,7 +278,9 @@ export class DigiWorld {
     this.setupTouchInput();
     this.resize();
     this.buildMenuBackdrop();
-    preloadSentinelAsset().catch((error) => console.warn('[Digi World] Skinned sentinel fallback active:', error));
+    this.audio.setMusicTrack('hub');
+    this.updateMusicUI();
+    preloadSentinelAsset().catch((error) => console.warn('[Vector Protocol] Skinned sentinel fallback active:', error));
     this.renderer.setAnimationLoop((time, frame) => this.frame(time, frame));
   }
 
@@ -382,6 +459,11 @@ export class DigiWorld {
   setupInput() {
     window.addEventListener('keydown', (event) => {
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) event.preventDefault();
+      if (event.code === 'KeyM') {
+        event.preventDefault();
+        if (!event.repeat) this.toggleMusic();
+        return;
+      }
       if (event.code === 'KeyF') {
         this.toggleFullscreen();
         return;
@@ -436,6 +518,31 @@ export class DigiWorld {
       this.pitch = THREE.MathUtils.clamp(this.pitch - event.movementY * 0.0016, -1.1, 1.1);
       this.applyCameraRotation();
     });
+  }
+
+  unlockAudio() {
+    this.audio.unlock();
+    this.audio.setMusicTrack(this.phase === 'menu' ? 'hub' : 'combat');
+  }
+
+  toggleMusic() {
+    this.audio.unlock();
+    const enabled = this.audio.setMusicEnabled(!this.audio.musicEnabled);
+    this.audio.setMusicTrack(this.phase === 'menu' ? 'hub' : 'combat');
+    if (enabled && this.phase !== 'menu') this.audio.startDrone();
+    this.updateMusicUI();
+    if (this.phase !== 'menu') this.toast(`MUSIC ${enabled ? 'ON' : 'OFF'}`, 1.2);
+    return enabled;
+  }
+
+  updateMusicUI() {
+    const enabled = this.audio.musicEnabled;
+    if (this.ui.musicToggle) {
+      this.ui.musicToggle.setAttribute('aria-pressed', String(enabled));
+      this.ui.musicToggle.setAttribute('aria-label', enabled ? 'Turn music off' : 'Turn music on');
+      this.ui.musicToggle.title = `Toggle music (M) · currently ${enabled ? 'on' : 'off'}`;
+    }
+    if (this.ui.musicToggleLabel) this.ui.musicToggleLabel.textContent = enabled ? 'Music on' : 'Music off';
   }
 
   setupTouchInput() {
@@ -607,7 +714,7 @@ export class DigiWorld {
       if (session !== this.xrSession) return;
       this.xrHitTestSource = await session.requestHitTestSource({ space: viewerSpace });
     } catch (error) {
-      console.info('[Digi World] AR hit-test fallback:', error.message);
+      console.info('[Vector Protocol] AR hit-test fallback:', error.message);
     }
   }
 
@@ -708,7 +815,7 @@ export class DigiWorld {
     context.strokeRect(8, 8, canvas.width - 16, canvas.height - 16);
     context.fillStyle = '#c8fbff';
     context.font = '700 34px sans-serif';
-    context.fillText(state.mode || 'DIGI WORLD', 34, 57);
+    context.fillText(state.mode || 'VECTOR PROTOCOL', 34, 57);
     context.fillStyle = '#8ba2aa';
     context.font = '600 24px monospace';
     context.fillText(`SIGNAL ${String(Math.round(state.score || 0)).padStart(6, '0')}`, 510, 55);
@@ -737,7 +844,7 @@ export class DigiWorld {
     context.strokeRect(10, 10, 1004, 492);
     context.fillStyle = '#58f2ff';
     context.font = '600 28px monospace';
-    context.fillText('D/W SPATIAL PROMPT', 62, 78);
+    context.fillText('V/P SPATIAL PROMPT', 62, 78);
     context.fillStyle = '#eefcff';
     context.font = '700 64px sans-serif';
     context.fillText(title, 62, 180);
@@ -851,6 +958,7 @@ export class DigiWorld {
 
   async startGame(gameMode, requestedPresentation = 'desktop', roomPreset = 'portal') {
     this.audio.unlock();
+    this.audio.setMusicTrack('combat');
     this.audio.startDrone();
     this.requestedPresentation = requestedPresentation;
     this.gameMode = gameMode;
@@ -865,7 +973,7 @@ export class DigiWorld {
       } catch (error) {
         this.presentation = 'desktop';
         this.toast(`${requestedPresentation.toUpperCase()} UNAVAILABLE // RUNNING IMMERSIVE PREVIEW`, 4);
-        console.info('[Digi World] XR fallback:', error.message);
+        console.info('[Vector Protocol] XR fallback:', error.message);
       }
     } else if (!this.xrSession) {
       this.presentation = 'desktop';
@@ -960,6 +1068,8 @@ export class DigiWorld {
 
   async goToMenu() {
     this.phase = 'menu';
+    this.audio.stopDrone();
+    this.audio.setMusicTrack('hub');
     document.exitPointerLock?.();
     if (this.currentMode) {
       this.currentMode.dispose();
@@ -1216,18 +1326,22 @@ export class DigiWorld {
 
   getState() {
     return {
-      title: 'Digi World',
+      title: 'VECTOR PROTOCOL',
       phase: this.phase,
       presentation: this.presentation,
       requestedPresentation: this.requestedPresentation,
       gameMode: this.gameMode,
       roomPreset: this.roomPreset,
       xr: this.xrCapabilities,
+      audio: {
+        music: this.audio.musicEnabled ? 'on' : 'off',
+        track: this.audio.musicTrack,
+      },
       hud: this.lastHUD,
       gameplay: this.currentMode?.getState() || null,
       controls: this.currentMode?.name === 'bike'
-        ? 'A/D turn, Space boost, Shift brake, Q toggle lightline, E disruption pulse, P/Escape pause, F fullscreen'
-        : 'WASD move, mouse aim, hold/release LMB throw, RMB guard/parry, Space jump, Shift dash, Q/E recall, P/Escape pause, F fullscreen',
+        ? 'A/D turn, Space boost, Shift brake, Q toggle lightline, E disruption pulse, M music, P/Escape pause, F fullscreen'
+        : 'WASD move, mouse aim, hold/release LMB throw, RMB guard/parry, Space jump, Shift dash, Q/E recall, M music, P/Escape pause, F fullscreen',
     };
   }
 }

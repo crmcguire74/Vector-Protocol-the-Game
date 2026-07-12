@@ -7,6 +7,8 @@ const ui = {
   loading: byId('loading-screen'),
   menu: byId('menu'),
   launchButton: byId('launch-button'),
+  musicToggle: byId('music-toggle'),
+  musicToggleLabel: byId('music-toggle-label'),
   presetPicker: byId('preset-picker'),
   selectedRealityLabel: byId('selected-reality-label'),
   selectedGameLabel: byId('selected-game-label'),
@@ -92,6 +94,39 @@ function selectButton(buttons, selected, value) {
 const presentationButtons = [...document.querySelectorAll('[data-presentation]')];
 const gameButtons = [...document.querySelectorAll('[data-game]')];
 const presetButtons = [...document.querySelectorAll('[data-preset]')];
+const instructionTabs = [...document.querySelectorAll('[data-instruction]')];
+const instructionPanels = [...document.querySelectorAll('[data-instruction-panel]')];
+
+function selectInstruction(value, focus = false) {
+  instructionTabs.forEach((tab) => {
+    const active = tab.dataset.instruction === value;
+    tab.classList.toggle('is-selected', active);
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    if (active && focus) tab.focus();
+  });
+  instructionPanels.forEach((panel) => {
+    const active = panel.dataset.instructionPanel === value;
+    panel.classList.toggle('hidden', !active);
+    panel.setAttribute('aria-hidden', String(!active));
+  });
+}
+
+instructionTabs.forEach((tab, tabIndex) => {
+  tab.addEventListener('click', () => selectInstruction(tab.dataset.instruction));
+  tab.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.code)) return;
+    event.preventDefault();
+    const nextIndex = event.code === 'Home'
+      ? 0
+      : event.code === 'End'
+        ? instructionTabs.length - 1
+        : (tabIndex + (event.code === 'ArrowRight' ? 1 : -1) + instructionTabs.length) % instructionTabs.length;
+    selectInstruction(instructionTabs[nextIndex].dataset.instruction, true);
+  });
+});
+
+selectInstruction('desktop');
 
 presentationButtons.forEach((button) => {
   button.addEventListener('click', () => {
@@ -119,11 +154,16 @@ presetButtons.forEach((button) => {
 let world;
 try {
   world = new DigiWorld(ui.canvas, ui);
-  window.digiWorld = world;
+  window.vectorProtocol = world;
   window.render_game_to_text = () => JSON.stringify(world.getState());
   window.advanceTime = (ms) => world.advanceTime(ms);
 
+  const unlockMenuAudio = () => world.unlockAudio();
+  document.addEventListener('pointerdown', unlockMenuAudio, { capture: true, once: true });
+  document.addEventListener('keydown', unlockMenuAudio, { capture: true, once: true });
+
   ui.launchButton.addEventListener('click', () => world.startGame(selection.game, selection.presentation, selection.preset));
+  ui.musicToggle.addEventListener('click', () => world.toggleMusic());
   ui.resumeButton.addEventListener('click', () => world.resume());
   ui.restartButton.addEventListener('click', () => world.restart());
   ui.exitButton.addEventListener('click', () => world.goToMenu());
@@ -153,7 +193,7 @@ try {
     window.setTimeout(() => ui.loading.classList.add('hidden'), 420);
   }, 650);
 } catch (error) {
-  console.error('[Digi World] Boot failure', error);
+  console.error('[Vector Protocol] Boot failure', error);
   ui.loading.querySelector('.boot-title').textContent = 'SYSTEM FAULT';
   ui.loading.querySelector('.boot-status').textContent = error.message;
 }

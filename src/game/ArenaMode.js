@@ -8,6 +8,8 @@ import {
   createHumanoid,
   createParticleBurst,
   createPlatform,
+  createRealityBreach,
+  createRoomFootprint,
   createShockwave,
   disposeObject,
   getCathedralTexture,
@@ -20,6 +22,8 @@ import {
 import { createAnimatedSentinel, updateSentinelRig } from './SentinelAsset.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
+const DISC_FORWARD = new THREE.Vector3(0, 0, 1);
+const DISC_RADIUS = 0.36;
 
 export class ArenaMode {
   constructor(world, { roomPreset = 'portal' } = {}) {
@@ -37,6 +41,7 @@ export class ArenaMode {
     this.bursts = [];
     this.shockwaves = [];
     this.arPanels = [];
+    this.breaches = [];
     this.fractureLevel = 0;
     this.wave = 1;
     this.waveDelay = 0;
@@ -51,6 +56,11 @@ export class ArenaMode {
     this.enemySerial = 0;
     this.disposed = false;
     this.isARPresentation = this.world.requestedPresentation === 'ar';
+    this.playerOpeningLatched = false;
+    this.openingCooldown = 0;
+    this.ricochetCount = 0;
+    this.arRoom = null;
+    this.arFootprint = null;
 
     this.player = {
       position: new THREE.Vector3(0, 0, this.isARPresentation ? 1.5 : 11.5),
@@ -96,31 +106,56 @@ export class ArenaMode {
     fill.position.set(10, 4, 7);
     this.root.add(ambient, key, rim, fill);
 
-    const layout = this.isARPresentation
-      ? [
-          [0, 0, 1.5, 3.7],
-          [0, 0.35, -6.8, 3.6],
-          [-5.4, 0.8, -11.5, 3.2],
-          [5.4, 0.8, -11.5, 3.2],
-        ]
-      : [
-          [0, 0, 10, 4.9],
-          [0, 1, 0.2, 4.2],
-          [-8.6, 2, -8.7, 4.25],
-          [8.6, 2, -8.7, 4.25],
-          [0, 3.2, -18, 5.4],
-        ];
+    if (this.isARPresentation) {
+      this.arRoom = this.getARRoomConfig();
+      this.arenaBounds = {
+        minX: this.arRoom.minX,
+        maxX: this.arRoom.maxX,
+        minZ: this.arRoom.minZ,
+        maxZ: this.arRoom.maxZ,
+        floorY: this.arRoom.floorY,
+        ceilingY: this.arRoom.ceilingY,
+      };
+      this.arFootprint = createRoomFootprint({
+        width: this.arRoom.width,
+        depth: this.arRoom.depth,
+        floorY: this.arRoom.floorY,
+        centerX: this.arRoom.centerX,
+        centerZ: this.arRoom.centerZ,
+        color: COLORS.cyan,
+      });
+      this.root.add(this.arFootprint);
+      this.player.position.set(
+        this.arRoom.centerX,
+        this.arRoom.floorY,
+        this.arRoom.maxZ - Math.min(0.7, this.arRoom.depth * 0.18),
+      );
+      this.buildARRoomShell();
+    } else {
+      this.arenaBounds = {
+        minX: -17,
+        maxX: 17,
+        minZ: -26,
+        maxZ: 17,
+        floorY: -7.72,
+        ceilingY: 10.5,
+      };
+      const layout = [
+        [0, 0, 10, 4.9],
+        [0, 1, 0.2, 4.2],
+        [-8.6, 2, -8.7, 4.25],
+        [8.6, 2, -8.7, 4.25],
+        [0, 3.2, -18, 5.4],
+      ];
+      layout.forEach(([x, y, z, radius], index) => {
+        const accent = index === 0 ? COLORS.cyan : index % 2 ? COLORS.violet : COLORS.coral;
+        const mesh = createPlatform(radius, y, accent, index * 29);
+        mesh.position.x = x;
+        mesh.position.z = z;
+        this.root.add(mesh);
+        this.platforms.push({ x, y, z, radius, mesh });
+      });
 
-    layout.forEach(([x, y, z, radius], index) => {
-      const accent = index === 0 ? COLORS.cyan : index % 2 ? COLORS.violet : COLORS.coral;
-      const mesh = createPlatform(radius, y, accent, index * 29);
-      mesh.position.x = x;
-      mesh.position.z = z;
-      this.root.add(mesh);
-      this.platforms.push({ x, y, z, radius, mesh });
-    });
-
-    if (!this.isARPresentation) {
       const voidGrid = new THREE.GridHelper(96, 64, COLORS.violet, 0x10233b);
       voidGrid.position.y = -8;
       voidGrid.material.transparent = true;
@@ -145,19 +180,41 @@ export class ArenaMode {
         column.rotation.set(this.random(), this.random(), this.random());
         this.root.add(column);
       }
-    } else {
-      this.buildARRoomShell();
     }
   }
 
-  buildARRoomShell() {
-    const presetConfig = {
-      portal: { columns: 7, rows: 5, width: 1.05, height: 0.78, z: -4.45 },
-      arena: { columns: 9, rows: 4, width: 1.05, height: 0.88, z: -4.75 },
-      tabletop: { columns: 6, rows: 4, width: 0.72, height: 0.58, z: -3.65 },
+  getARRoomConfig() {
+    const presets = {
+      portal: { width: 5.6, depth: 6.45, centerZ: -1.225, columns: 7, rows: 5, wallHeight: 3.9 },
+      arena: { width: 8, depth: 7.8, centerZ: -0.85, columns: 9, rows: 4, wallHeight: 3.55 },
+      tabletop: { width: 4.4, depth: 4.8, centerZ: -1.25, columns: 6, rows: 4, wallHeight: 2.8 },
     };
-    const config = presetConfig[this.roomPreset] || presetConfig.portal;
-    this.arShellZ = config.z;
+    const preset = presets[this.roomPreset] || presets.portal;
+    const centerX = 0;
+    const floorY = 0;
+    return {
+      ...preset,
+      centerX,
+      floorY,
+      ceilingY: preset.wallHeight,
+      minX: centerX - preset.width * 0.5,
+      maxX: centerX + preset.width * 0.5,
+      minZ: preset.centerZ - preset.depth * 0.5,
+      maxZ: preset.centerZ + preset.depth * 0.5,
+      source: 'preset-room-footprint',
+    };
+  }
+
+  buildARRoomShell() {
+    const room = this.arRoom || this.getARRoomConfig();
+    const config = {
+      columns: room.columns,
+      rows: room.rows,
+      width: room.width / room.columns,
+      height: room.wallHeight / room.rows,
+      z: room.minZ,
+    };
+    this.arShellZ = room.minZ;
     const shell = new THREE.Group();
     shell.name = `ar-${this.roomPreset}-break-shell`;
     const totalWidth = config.columns * config.width;
@@ -200,7 +257,7 @@ export class ArenaMode {
         depthWrite: false,
       }),
     );
-    portal.position.set(0, 1.65, config.z - 0.13);
+    portal.position.set(room.centerX, room.floorY + room.wallHeight * 0.5, config.z - 0.13);
     portal.userData.baseOpacity = 0.2;
     shell.add(portal);
     this.arPortal = portal;
@@ -215,7 +272,7 @@ export class ArenaMode {
         depthWrite: false,
       }),
     );
-    cathedralPortal.position.set(0, 1.65, config.z - 0.2);
+    cathedralPortal.position.set(room.centerX, room.floorY + room.wallHeight * 0.5, config.z - 0.2);
     shell.add(cathedralPortal);
     this.arCathedralPortal = cathedralPortal;
 
@@ -237,7 +294,7 @@ export class ArenaMode {
         );
         panel.position.set(
           (column - (config.columns - 1) / 2) * config.width,
-          0.5 + row * config.height,
+          room.floorY + config.height * 0.5 + row * config.height,
           config.z,
         );
         panel.rotation.z = (this.random() - 0.5) * 0.025;
@@ -252,7 +309,7 @@ export class ArenaMode {
       new THREE.EdgesGeometry(new THREE.BoxGeometry(totalWidth + 0.25, totalHeight + 0.25, 0.18)),
       new THREE.LineBasicMaterial({ color: COLORS.cyan, transparent: true, opacity: 0.65 }),
     );
-    frame.position.set(0, 1.65, config.z + 0.03);
+    frame.position.set(room.centerX, room.floorY + room.wallHeight * 0.5, config.z + 0.03);
     shell.add(frame);
     this.root.add(shell);
     this.arShell = shell;
@@ -260,11 +317,13 @@ export class ArenaMode {
 
   spawnWave(wave) {
     const ar = this.isARPresentation;
-    const positions = ar
+    const room = this.arRoom;
+    const positions = ar && room
       ? [
-          [0, 0.35, -6.7],
-          [-4.9, 0.8, -11.5],
-          [4.9, 0.8, -11.5],
+          [room.centerX, room.floorY, room.minZ + Math.min(1.2, room.depth * 0.22)],
+          [room.centerX - room.width * 0.27, room.floorY, room.minZ + room.depth * 0.34],
+          [room.centerX + room.width * 0.27, room.floorY, room.minZ + room.depth * 0.34],
+          [room.centerX, room.floorY, room.minZ + Math.min(0.95, room.depth * 0.2)],
         ]
       : [
           [0, 1, 0.2],
@@ -338,6 +397,7 @@ export class ArenaMode {
       running: false,
       rig: null,
       dead: false,
+      openingCooldown: 0,
     };
     this.enemies.push(enemy);
     this.upgradeEnemyVisual(enemy);
@@ -375,6 +435,21 @@ export class ArenaMode {
   }
 
   getPlatformBelow(position) {
+    if (this.isARPresentation && this.arRoom) {
+      const inside =
+        position.x >= this.arRoom.minX && position.x <= this.arRoom.maxX &&
+        position.z >= this.arRoom.minZ && position.z <= this.arRoom.maxZ;
+      if (inside && !this.isFloorOpening(position.x, position.z)) {
+        return {
+          x: this.arRoom.centerX,
+          y: this.arRoom.floorY,
+          z: this.arRoom.centerZ,
+          radius: Math.max(this.arRoom.width, this.arRoom.depth),
+          roomFootprint: true,
+        };
+      }
+      return null;
+    }
     let result = null;
     for (const platform of this.platforms) {
       const dx = position.x - platform.x;
@@ -433,9 +508,8 @@ export class ArenaMode {
     const speed = 14 + Math.min(1, this.charge) * 8;
     const mesh = createDisc(COLORS.cyan, false);
     mesh.position.copy(origin);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), localRay.direction);
     this.root.add(mesh);
-    const trail = createDiscTrail(COLORS.cyan, 32);
+    const trail = createDiscTrail(COLORS.cyan, 14);
     trail.position.set(0, 0, 0);
     this.root.add(trail);
     this.projectiles.push({
@@ -452,6 +526,12 @@ export class ArenaMode {
       crossedShell: false,
       returnToAmmo: true,
       trail,
+      color: COLORS.cyan,
+      banks: 0,
+      maxBanks: 5,
+      bankCooldown: 0,
+      wobble: 0,
+      flightSpin: 28 + this.random() * 8,
     });
     this.player.discs -= 1;
     this.world.pulseCrosshair();
@@ -489,6 +569,109 @@ export class ArenaMode {
     this.score += 50;
   }
 
+  spawnPersistentBreach(impact, normal, color = COLORS.cyan) {
+    if (!this.isARPresentation || !this.arRoom || !normal?.lengthSq()) return null;
+    const breachNormal = normal.clone().normalize();
+    const type = breachNormal.y > 0.55 ? 'floor' : 'wall';
+    const radius = type === 'floor' ? 0.58 + this.random() * 0.12 : 0.64 + this.random() * 0.12;
+    const position = impact.clone();
+    if (type === 'floor') {
+      position.y = this.arRoom.floorY + 0.018;
+      breachNormal.copy(UP);
+    } else {
+      position.y = THREE.MathUtils.clamp(position.y, this.arRoom.floorY + 0.42, this.arRoom.ceilingY - 0.32);
+    }
+
+    const nearby = this.breaches.find((breach) => (
+      breach.type === type &&
+      breach.normal.dot(breachNormal) > 0.82 &&
+      breach.position.distanceToSquared(position) < (breach.radius * 0.72) ** 2
+    ));
+    if (nearby) {
+      nearby.targetScale = Math.min(1.24, (nearby.targetScale || 1) + 0.08);
+      nearby.mesh.userData.halo.material.opacity = 0.68;
+      return nearby;
+    }
+    if (this.breaches.length >= 18) return null;
+
+    const mesh = createRealityBreach(color, radius);
+    mesh.position.copy(position).addScaledVector(breachNormal, 0.018);
+    mesh.quaternion.setFromUnitVectors(DISC_FORWARD, breachNormal);
+    mesh.scale.setScalar(0.04);
+    this.root.add(mesh);
+    const breach = {
+      mesh,
+      position: position.clone(),
+      normal: breachNormal,
+      radius,
+      type,
+      growth: 0,
+      targetScale: 1,
+    };
+    this.breaches.push(breach);
+    this.fractureLevel += 1;
+    this.world.announce(type === 'floor' ? 'FLOOR BREACH // MIND THE VOID' : 'ROOM BREACH // SPACE UNSEALED', 1.05);
+    return breach;
+  }
+
+  getOpeningAtPoint(point, includeWalls = true) {
+    for (const breach of this.breaches) {
+      const activeRadius = breach.radius * Math.min(1, Math.max(0.2, breach.growth)) * 0.78;
+      if (breach.type === 'floor') {
+        const dx = point.x - breach.position.x;
+        const dz = point.z - breach.position.z;
+        if (dx * dx + dz * dz < activeRadius * activeRadius) return breach;
+      } else if (includeWalls) {
+        const delta = point.clone().sub(breach.position);
+        const planeDistance = Math.abs(delta.dot(breach.normal));
+        const tangentDistanceSq = Math.max(0, delta.lengthSq() - planeDistance * planeDistance);
+        if (planeDistance < 0.42 && tangentDistanceSq < activeRadius * activeRadius) return breach;
+      }
+    }
+    return null;
+  }
+
+  isFloorOpening(x, z) {
+    const probe = new THREE.Vector3(x, this.arRoom?.floorY || 0, z);
+    return this.getOpeningAtPoint(probe, false);
+  }
+
+  handlePlayerOpening(point) {
+    if (!this.isARPresentation) return;
+    const opening = this.getOpeningAtPoint(point, true);
+    if (
+      opening &&
+      !this.playerOpeningLatched &&
+      this.openingCooldown <= 0 &&
+      this.player.invulnerable <= 0
+    ) {
+      this.playerOpeningLatched = true;
+      this.openingCooldown = 1.65;
+      this.damagePlayer(34);
+      this.world.announce(
+        opening.type === 'floor' ? 'VOID FALL // ONE LIFE LOST' : 'BREACH ENTRY // ONE LIFE LOST',
+        1.25,
+      );
+    } else if (!opening) {
+      this.playerOpeningLatched = false;
+    }
+  }
+
+  handleEnemyOpening(enemy) {
+    if (!this.isARPresentation || enemy.dead || enemy.openingCooldown > 0) return;
+    const opening = this.isFloorOpening(enemy.mesh.position.x, enemy.mesh.position.z);
+    if (!opening) return;
+    enemy.openingCooldown = 1.8;
+    const impact = enemy.mesh.position.clone().add(new THREE.Vector3(0, 0.45, 0));
+    this.damageEnemy(enemy, Math.ceil(enemy.maxHealth * 0.5), impact);
+    if (enemy.dead) return;
+    const safe = this.pickARRoamTarget(enemy, true);
+    enemy.mesh.position.copy(safe);
+    enemy.origin.copy(safe);
+    enemy.navTarget.copy(safe);
+    this.world.announce(`${enemy.role} LOST TO THE BREACH`, 1.05);
+  }
+
   getEnemyThrowOrigin(enemy) {
     const origin = enemy.mesh.position.clone().add(new THREE.Vector3(0, 1.62, 0));
     const throwHand = enemy.rig?.bones['mixamorig:RightHand'];
@@ -502,13 +685,17 @@ export class ArenaMode {
     if (enemy.dead) return;
     const origin = this.getEnemyThrowOrigin(enemy);
     if (enemy.rig) enemy.rig.handDisc.visible = false;
-    const direction = target.clone().sub(origin).normalize();
+    const aim = target.clone();
+    if (this.arenaBounds && this.random() < Math.min(0.48, 0.18 + this.wave * 0.08)) {
+      const wallX = this.random() < 0.5 ? this.arenaBounds.minX : this.arenaBounds.maxX;
+      aim.x = wallX * 2 - target.x;
+    }
+    const direction = aim.sub(origin).normalize();
     origin.addScaledVector(direction, 0.16);
     const mesh = createDisc(enemy.color, true);
     mesh.position.copy(origin);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
     this.root.add(mesh);
-    const trail = createDiscTrail(enemy.color, 26);
+    const trail = createDiscTrail(enemy.color, 12);
     this.root.add(trail);
     this.projectiles.push({
       id: ++this.discSerial,
@@ -523,6 +710,12 @@ export class ArenaMode {
       hitIds: new Set(),
       returnToAmmo: false,
       trail,
+      color: enemy.color,
+      banks: 0,
+      maxBanks: 4,
+      bankCooldown: 0,
+      wobble: 0,
+      flightSpin: 25 + this.random() * 7,
     });
   }
 
@@ -607,8 +800,13 @@ export class ArenaMode {
     const player = this.player;
     player.dashCooldown = Math.max(0, player.dashCooldown - dt);
     player.invulnerable = Math.max(0, player.invulnerable - dt);
+    this.openingCooldown = Math.max(0, this.openingCooldown - dt);
 
-    if (this.world.presentation === 'ar') {
+    const physicalAR =
+      this.isARPresentation &&
+      this.world.presentation === 'ar' &&
+      this.world.renderer.xr.isPresenting;
+    if (physicalAR) {
       this.root.updateWorldMatrix(true, false);
       const cameraPosition = new THREE.Vector3();
       this.world.camera.getWorldPosition(cameraPosition);
@@ -616,6 +814,7 @@ export class ArenaMode {
       player.position.set(localCamera.x, Math.max(0, localCamera.y - this.world.eyeHeight), localCamera.z);
       player.velocity.set(0, 0, 0);
       player.grounded = true;
+      this.handlePlayerOpening(localCamera);
       this.world.consumeXRJump();
       this.world.consumeXRDash();
       return;
@@ -639,7 +838,8 @@ export class ArenaMode {
     player.velocity.x = THREE.MathUtils.damp(player.velocity.x, move.x * speed, accel, dt);
     player.velocity.z = THREE.MathUtils.damp(player.velocity.z, move.z * speed, accel, dt);
 
-    if ((this.world.input.consumePress('Space') || this.world.consumeXRJump()) && player.grounded) {
+    const jumpPressed = this.world.input.consumePress('Space') || this.world.consumeXRJump();
+    if (jumpPressed && player.grounded && !this.isARPresentation) {
       player.velocity.y = 7.4;
       player.velocity.addScaledVector(forward, 3.9);
       player.grounded = false;
@@ -661,7 +861,17 @@ export class ArenaMode {
     const previousY = player.position.y;
     player.position.x += player.velocity.x * dt;
     player.position.z += player.velocity.z * dt;
-    const under = this.getPlatformBelow(player.position);
+    if (this.isARPresentation && this.arRoom) {
+      const headProbe = player.position.clone().add(new THREE.Vector3(0, this.world.eyeHeight, 0));
+      this.handlePlayerOpening(headProbe);
+      const margin = 0.18;
+      player.position.x = THREE.MathUtils.clamp(player.position.x, this.arRoom.minX + margin, this.arRoom.maxX - margin);
+      player.position.z = THREE.MathUtils.clamp(player.position.z, this.arRoom.minZ + margin, this.arRoom.maxZ - margin);
+    }
+    if (this.world.renderer.xr.isPresenting) this.world.setPlayerPosition(player.position);
+    const supportProbe = this.world.renderer.xr.isPresenting ? this.getPlayerCenter() : player.position.clone();
+    supportProbe.y = player.position.y;
+    const under = this.getPlatformBelow(supportProbe);
     if (player.grounded && under && Math.abs(player.position.y - under.y) < 0.28) {
       player.position.y = under.y;
       player.velocity.y = 0;
@@ -676,12 +886,28 @@ export class ArenaMode {
       }
     }
 
-    if (player.position.y < -10) {
-      this.damagePlayer(16);
-      player.position.set(0, 0, this.isARPresentation ? 1.5 : 11.5);
+    const fallLimit = this.isARPresentation ? -2.8 : -10;
+    if (player.position.y < fallLimit) {
+      const openingAlreadyCharged =
+        this.isARPresentation && this.playerOpeningLatched && this.openingCooldown > 0;
+      if (!openingAlreadyCharged) this.damagePlayer(this.isARPresentation ? 34 : 16);
+      if (this.isARPresentation && this.arRoom) {
+        player.position.set(
+          this.arRoom.centerX,
+          this.arRoom.floorY,
+          this.arRoom.maxZ - Math.min(0.7, this.arRoom.depth * 0.18),
+        );
+        this.playerOpeningLatched = true;
+        this.openingCooldown = 1.2;
+      } else {
+        player.position.set(0, 0, 11.5);
+      }
       player.velocity.set(0, 0, 0);
       player.grounded = true;
-      this.world.announce('VOID RETURN // SIGNAL -16', 1.2);
+      this.world.announce(
+        this.isARPresentation ? 'VOID RETURN // ONE LIFE LOST' : 'VOID RETURN // SIGNAL -16',
+        1.2,
+      );
     }
     this.world.setPlayerPosition(player.position);
     const planarSpeed = Math.hypot(player.velocity.x, player.velocity.z);
@@ -693,21 +919,48 @@ export class ArenaMode {
     );
   }
 
+  pickARRoamTarget(enemy, force = false) {
+    if (!this.arRoom) return enemy.origin.clone();
+    const margin = Math.min(0.62, this.arRoom.width * 0.13, this.arRoom.depth * 0.13);
+    let candidate = enemy.origin.clone();
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      candidate.set(
+        THREE.MathUtils.lerp(this.arRoom.minX + margin, this.arRoom.maxX - margin, this.random()),
+        this.arRoom.floorY,
+        THREE.MathUtils.lerp(this.arRoom.minZ + margin, this.arRoom.maxZ - margin, this.random()),
+      );
+      if (!this.isFloorOpening(candidate.x, candidate.z)) return candidate;
+    }
+    if (force) {
+      candidate.set(
+        this.arRoom.centerX,
+        this.arRoom.floorY,
+        this.arRoom.minZ + this.arRoom.depth * 0.3,
+      );
+    }
+    return candidate;
+  }
+
   updateEnemies(dt) {
     for (const enemy of this.enemies) {
       if (enemy.dead) continue;
+      enemy.openingCooldown = Math.max(0, enemy.openingCooldown - dt);
       enemy.phase += dt * (enemy.role === 'LEAPER' ? 2.2 : 1.25);
       const activeTelegraph = this.telegraphs.find((telegraph) => telegraph.enemy === enemy);
       const attacking = Boolean(activeTelegraph);
       enemy.relocateTimer -= dt;
       if (enemy.relocateTimer <= 0 && !attacking) {
-        const angle = this.random() * Math.PI * 2;
-        const radius = (enemy.role === 'PRIME' ? 3.35 : enemy.role === 'LEAPER' ? 3.5 : 3.2) * (0.64 + this.random() * 0.36);
-        enemy.navTarget.set(
-          enemy.origin.x + Math.cos(angle) * radius,
-          enemy.origin.y,
-          enemy.origin.z + Math.sin(angle) * radius,
-        );
+        if (this.isARPresentation && this.arRoom) {
+          enemy.navTarget.copy(this.pickARRoamTarget(enemy));
+        } else {
+          const angle = this.random() * Math.PI * 2;
+          const radius = (enemy.role === 'PRIME' ? 3.35 : enemy.role === 'LEAPER' ? 3.5 : 3.2) * (0.64 + this.random() * 0.36);
+          enemy.navTarget.set(
+            enemy.origin.x + Math.cos(angle) * radius,
+            enemy.origin.y,
+            enemy.origin.z + Math.sin(angle) * radius,
+          );
+        }
         enemy.relocateTimer = 1.05 + this.random() * 1.15;
       }
       const toTarget = enemy.navTarget.clone().sub(enemy.mesh.position);
@@ -721,6 +974,21 @@ export class ArenaMode {
         enemy.mesh.position.y = THREE.MathUtils.damp(enemy.mesh.position.y, enemy.origin.y + strideLift, 14, dt);
       } else {
         enemy.mesh.position.y = THREE.MathUtils.damp(enemy.mesh.position.y, enemy.origin.y, 12, dt);
+      }
+      if (this.isARPresentation && this.arRoom) {
+        const margin = 0.32;
+        enemy.mesh.position.x = THREE.MathUtils.clamp(
+          enemy.mesh.position.x,
+          this.arRoom.minX + margin,
+          this.arRoom.maxX - margin,
+        );
+        enemy.mesh.position.z = THREE.MathUtils.clamp(
+          enemy.mesh.position.z,
+          this.arRoom.minZ + margin,
+          this.arRoom.maxZ - margin,
+        );
+        this.handleEnemyOpening(enemy);
+        if (enemy.dead) continue;
       }
       const facingTarget = enemy.running ? enemy.navTarget.clone() : this.getPlayerCenter();
       facingTarget.y = enemy.mesh.position.y;
@@ -809,6 +1077,123 @@ export class ArenaMode {
     }
   }
 
+  getProjectileFloorHeight(projectile) {
+    if (this.isARPresentation && this.arRoom) return this.arRoom.floorY;
+    let floor = this.arenaBounds.floorY;
+    for (const platform of this.platforms) {
+      const dx = projectile.position.x - platform.x;
+      const dz = projectile.position.z - platform.z;
+      const top = platform.y + 0.055;
+      const crossedTop = projectile.previous.y >= top && projectile.position.y <= top + 0.08;
+      if (crossedTop && dx * dx + dz * dz <= (platform.radius - 0.08) ** 2) {
+        floor = Math.max(floor, top);
+      }
+    }
+    return floor;
+  }
+
+  recordRicochet(projectile, impact, normal) {
+    projectile.banks += 1;
+    projectile.bankCooldown = 0.055;
+    projectile.wobble = 1;
+    this.ricochetCount += 1;
+    const color = projectile.color || (projectile.owner === 'player' ? COLORS.cyan : COLORS.coral);
+    this.bursts.push(createParticleBurst(this.root, impact, color, 10, 0.065));
+    this.shockwaves.push(createShockwave(this.root, impact, color, normal.y > 0.55, normal));
+    this.world.audio?.tone({
+      frequency: 380,
+      endFrequency: 145,
+      duration: 0.075,
+      gain: 0.035,
+      type: 'triangle',
+    });
+    if (projectile.owner === 'player') this.score += 12;
+    if (this.isARPresentation) {
+      this.spawnPersistentBreach(impact, normal, color);
+      if (
+        normal.z > 0.55 &&
+        impact.z <= this.arRoom.minZ + 0.45 &&
+        !projectile.crossedShell
+      ) {
+        projectile.crossedShell = true;
+        this.fractureReality(impact);
+      }
+    }
+  }
+
+  applyProjectileRicochet(projectile, dt) {
+    projectile.bankCooldown = Math.max(0, projectile.bankCooldown - dt);
+    if (projectile.returning || projectile.bankCooldown > 0) return false;
+    const bounds = this.arenaBounds;
+    const position = projectile.position;
+    const velocity = projectile.velocity;
+    let normal = null;
+
+    const floor = this.getProjectileFloorHeight(projectile) + 0.055;
+    if (position.y < floor && velocity.y < 0) {
+      position.y = floor;
+      normal = new THREE.Vector3(0, 1, 0);
+    } else if (position.y > bounds.ceilingY - 0.055 && velocity.y > 0) {
+      position.y = bounds.ceilingY - 0.055;
+      normal = new THREE.Vector3(0, -1, 0);
+    } else if (position.x < bounds.minX + DISC_RADIUS && velocity.x < 0) {
+      position.x = bounds.minX + DISC_RADIUS;
+      normal = new THREE.Vector3(1, 0, 0);
+    } else if (position.x > bounds.maxX - DISC_RADIUS && velocity.x > 0) {
+      position.x = bounds.maxX - DISC_RADIUS;
+      normal = new THREE.Vector3(-1, 0, 0);
+    } else if (position.z < bounds.minZ + DISC_RADIUS && velocity.z < 0) {
+      position.z = bounds.minZ + DISC_RADIUS;
+      normal = new THREE.Vector3(0, 0, 1);
+    } else if (position.z > bounds.maxZ - DISC_RADIUS && velocity.z > 0) {
+      position.z = bounds.maxZ - DISC_RADIUS;
+      normal = new THREE.Vector3(0, 0, -1);
+    }
+    if (!normal) return false;
+
+    const approach = velocity.dot(normal);
+    if (approach < 0) velocity.addScaledVector(normal, -2 * approach).multiplyScalar(0.94);
+    this.recordRicochet(projectile, position.clone(), normal);
+    if (projectile.banks > projectile.maxBanks) {
+      if (projectile.owner === 'player') projectile.returning = true;
+      else return true;
+    }
+    return false;
+  }
+
+  updateDiscAttitude(projectile, dt) {
+    const horizontal = new THREE.Vector3(projectile.velocity.x, 0, projectile.velocity.z);
+    const horizontalSpeed = Math.max(0.001, horizontal.length());
+    horizontal.multiplyScalar(1 / horizontalSpeed);
+    const normal = UP.clone().addScaledVector(
+      horizontal,
+      THREE.MathUtils.clamp(-projectile.velocity.y / horizontalSpeed, -0.24, 0.24),
+    );
+    const right = new THREE.Vector3(-horizontal.z, 0, horizontal.x);
+    normal.addScaledVector(right, Math.sin(projectile.age * 38) * projectile.wobble * 0.11).normalize();
+    const target = new THREE.Quaternion().setFromUnitVectors(UP, normal);
+    projectile.mesh.quaternion.slerp(target, 1 - Math.exp(-18 * dt));
+    if (projectile.mesh.userData.rotor) {
+      projectile.mesh.userData.rotor.rotation.y += projectile.flightSpin * dt;
+    }
+    projectile.wobble = THREE.MathUtils.damp(projectile.wobble, 0, 7, dt);
+  }
+
+  updateBreaches(dt) {
+    for (const breach of this.breaches) {
+      breach.growth = Math.min(1, breach.growth + dt * 3.8);
+      const eased = THREE.MathUtils.smoothstep(breach.growth, 0, 1) * (breach.targetScale || 1);
+      breach.mesh.scale.setScalar(Math.max(0.04, eased));
+      breach.mesh.userData.rim.rotation.z += dt * (breach.type === 'floor' ? 0.42 : -0.35);
+      breach.mesh.userData.halo.material.opacity = THREE.MathUtils.damp(
+        breach.mesh.userData.halo.material.opacity,
+        0.34 + Math.sin(this.elapsed * 2.1 + breach.position.x) * 0.07,
+        4,
+        dt,
+      );
+    }
+  }
+
   updateProjectiles(dt) {
     const playerCenter = this.getPlayerCenter();
     for (let i = this.projectiles.length - 1; i >= 0; i -= 1) {
@@ -822,18 +1207,10 @@ export class ArenaMode {
       }
       projectile.position.addScaledVector(projectile.velocity, dt);
       updateDiscTrail(projectile.trail, projectile.position);
-      projectile.mesh.rotation.z += dt * 22;
-      projectile.mesh.rotation.y += dt * 4;
-
-      if (
-        this.arShellZ !== undefined &&
-        projectile.owner === 'player' &&
-        !projectile.crossedShell &&
-        projectile.previous.z > this.arShellZ &&
-        projectile.position.z <= this.arShellZ
-      ) {
-        projectile.crossedShell = true;
-        this.fractureReality(projectile.position.clone());
+      this.updateDiscAttitude(projectile, dt);
+      if (this.applyProjectileRicochet(projectile, dt)) {
+        this.removeProjectile(i);
+        continue;
       }
 
       if (projectile.owner === 'player') {
@@ -916,6 +1293,7 @@ export class ArenaMode {
     this.updateEnemies(dt);
     this.updateTelegraphs(dt);
     this.updateProjectiles(dt);
+    this.updateBreaches(dt);
     updateBursts(this.bursts, dt);
     updateShockwaves(this.shockwaves, dt, this.world.camera);
     updateEnvironment(this.environment, this.elapsed, dt);
@@ -993,6 +1371,7 @@ export class ArenaMode {
         y: +disc.position.y.toFixed(1),
         z: +disc.position.z.toFixed(1),
         returning: disc.returning,
+        banks: disc.banks,
       })),
       platforms: this.platforms.map((platform) => ({
         x: platform.x,
@@ -1009,6 +1388,23 @@ export class ArenaMode {
       combo: this.combo,
       charging: this.charging,
       realityFractures: this.fractureLevel,
+      ricochets: this.ricochetCount,
+      roomFootprint: this.arRoom
+        ? {
+            source: this.arRoom.source,
+            minX: +this.arRoom.minX.toFixed(2),
+            maxX: +this.arRoom.maxX.toFixed(2),
+            minZ: +this.arRoom.minZ.toFixed(2),
+            maxZ: +this.arRoom.maxZ.toFixed(2),
+          }
+        : null,
+      breaches: this.breaches.map((breach) => ({
+        type: breach.type,
+        x: +breach.position.x.toFixed(2),
+        y: +breach.position.y.toFixed(2),
+        z: +breach.position.z.toFixed(2),
+        radius: +breach.radius.toFixed(2),
+      })),
       roomPreset: this.roomPreset,
     };
   }
