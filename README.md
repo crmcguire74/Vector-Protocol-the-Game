@@ -1,6 +1,6 @@
-# Digi World
+# Vector Protocol
 
-Digi World is an original first-person digital-sport game built with Three.js and WebXR. It contains two complete arcade loops:
+Vector Protocol is an original first-person digital-sport game built with Three.js and WebXR. It contains two complete arcade loops:
 
 - **Shard Arena** — throw and recall arc discs, parry hostile throws, dash, jump between circular platforms, and defeat increasingly dangerous humanoid Sentinels.
 - **Lightline Pursuit** — pilot a first-person light runner, lay a lethal energy wall, out-turn three tactical rivals, boost, brake, and cut openings with a disruption pulse.

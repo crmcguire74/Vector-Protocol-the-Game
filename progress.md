@@ -29,4 +29,4 @@ Original prompt: create a modernized clone of the arcade game Discs of Tron. Thi
 
 - Manually validate WebXR controller comfort and AR room alignment on supported headset/phone hardware before release.
 - Profile the high-detail scene on target standalone headsets and, if needed, add model LODs and split the main bundle for lower-end devices.
-- Keep Digi World and PaGuire/VECTOR PROTOCOL in separate repositories and verify the working directory before future prompts or Git operations.
+- Keep Vector Protocol and PaGuire in separate repositories and verify the working directory before future prompts or Git operations.

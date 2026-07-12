@@ -205,6 +205,170 @@ export class ArenaMode {
     };
   }
 
+  setBoundedFloorFootprint(footprint) {
+    if (
+      !this.isARPresentation ||
+      !footprint?.vertices?.length ||
+      footprint.vertices.length < 3 ||
+      footprint.width < 1.5 ||
+      footprint.depth < 1.5 ||
+      footprint.area < 2
+    ) return false;
+    const fallback = this.arRoom || this.getARRoomConfig();
+    this.arRoom = {
+      ...fallback,
+      source: 'webxr-bounded-floor',
+      vertices: footprint.vertices.map((vertex) => ({ x: vertex.x, y: vertex.y, z: vertex.z })),
+      signedArea: footprint.signedArea,
+      area: footprint.area,
+      width: footprint.width,
+      depth: footprint.depth,
+      centerX: footprint.centerX,
+      centerZ: footprint.centerZ,
+      floorY: footprint.floorY,
+      minX: footprint.minX,
+      maxX: footprint.maxX,
+      minZ: footprint.minZ,
+      maxZ: footprint.maxZ,
+      ceilingY: footprint.floorY + fallback.wallHeight,
+    };
+    this.arenaBounds = {
+      minX: this.arRoom.minX,
+      maxX: this.arRoom.maxX,
+      minZ: this.arRoom.minZ,
+      maxZ: this.arRoom.maxZ,
+      floorY: this.arRoom.floorY,
+      ceilingY: this.arRoom.ceilingY,
+    };
+
+    if (this.arFootprint) disposeObject(this.arFootprint);
+    this.arFootprint = createRoomFootprint({
+      width: this.arRoom.width,
+      depth: this.arRoom.depth,
+      floorY: this.arRoom.floorY,
+      centerX: this.arRoom.centerX,
+      centerZ: this.arRoom.centerZ,
+      color: COLORS.cyan,
+    });
+    this.arFootprint.userData.outline.visible = false;
+    this.arFootprint.userData.guides.visible = false;
+    const polygon = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(this.arRoom.vertices.map((vertex) => new THREE.Vector3(
+        vertex.x - this.arRoom.centerX,
+        0.035,
+        vertex.z - this.arRoom.centerZ,
+      ))),
+      new THREE.LineBasicMaterial({
+        color: COLORS.ice,
+        transparent: true,
+        opacity: 0.82,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    polygon.name = 'webxr-bounded-floor-outline';
+    this.arFootprint.add(polygon);
+    this.root.add(this.arFootprint);
+
+    if (this.arShell) disposeObject(this.arShell);
+    this.portalTexture?.dispose();
+    this.portalTexture = null;
+    this.arPanels.length = 0;
+    this.buildARRoomShell();
+
+    for (const enemy of this.enemies) {
+      if (enemy.dead) continue;
+      const safe = this.pickARRoamTarget(enemy, true);
+      enemy.mesh.position.copy(safe);
+      enemy.origin.copy(safe);
+      enemy.navTarget.copy(safe);
+    }
+    this.world.announce('BOUNDED PLAY SPACE LOCKED', 1.35);
+    return true;
+  }
+
+  roomContainsPoint(x, z, margin = 0) {
+    const room = this.arRoom;
+    if (!room) return false;
+    if (!room.vertices?.length) {
+      return x >= room.minX + margin && x <= room.maxX - margin &&
+        z >= room.minZ + margin && z <= room.maxZ - margin;
+    }
+    let inside = false;
+    let edgeDistanceSq = Infinity;
+    for (let index = 0, previousIndex = room.vertices.length - 1; index < room.vertices.length; previousIndex = index, index += 1) {
+      const current = room.vertices[index];
+      const previous = room.vertices[previousIndex];
+      const crosses = (current.z > z) !== (previous.z > z) &&
+        x < ((previous.x - current.x) * (z - current.z)) / (previous.z - current.z || 1e-6) + current.x;
+      if (crosses) inside = !inside;
+      const edgeX = previous.x - current.x;
+      const edgeZ = previous.z - current.z;
+      const edgeLengthSq = edgeX * edgeX + edgeZ * edgeZ;
+      const t = THREE.MathUtils.clamp(((x - current.x) * edgeX + (z - current.z) * edgeZ) / Math.max(1e-6, edgeLengthSq), 0, 1);
+      const nearX = current.x + edgeX * t;
+      const nearZ = current.z + edgeZ * t;
+      edgeDistanceSq = Math.min(edgeDistanceSq, (x - nearX) ** 2 + (z - nearZ) ** 2);
+    }
+    return inside && edgeDistanceSq >= margin * margin;
+  }
+
+  clampPointToRoom(x, z, margin = 0.18) {
+    const room = this.arRoom;
+    if (!room || this.roomContainsPoint(x, z, margin)) return new THREE.Vector2(x, z);
+    if (!room.vertices?.length) {
+      return new THREE.Vector2(
+        THREE.MathUtils.clamp(x, room.minX + margin, room.maxX - margin),
+        THREE.MathUtils.clamp(z, room.minZ + margin, room.maxZ - margin),
+      );
+    }
+    let closest = new THREE.Vector2(room.centerX, room.centerZ);
+    let closestDistanceSq = Infinity;
+    for (let index = 0; index < room.vertices.length; index += 1) {
+      const current = room.vertices[index];
+      const next = room.vertices[(index + 1) % room.vertices.length];
+      const edgeX = next.x - current.x;
+      const edgeZ = next.z - current.z;
+      const lengthSq = edgeX * edgeX + edgeZ * edgeZ;
+      const t = THREE.MathUtils.clamp(((x - current.x) * edgeX + (z - current.z) * edgeZ) / Math.max(1e-6, lengthSq), 0, 1);
+      const candidate = new THREE.Vector2(current.x + edgeX * t, current.z + edgeZ * t);
+      const distanceSq = (x - candidate.x) ** 2 + (z - candidate.y) ** 2;
+      if (distanceSq < closestDistanceSq) {
+        closestDistanceSq = distanceSq;
+        closest.copy(candidate);
+      }
+    }
+    const inward = new THREE.Vector2(room.centerX - closest.x, room.centerZ - closest.y).normalize();
+    return closest.addScaledVector(inward, margin);
+  }
+
+  getPolygonBoundaryCollision(position, velocity, radius) {
+    const room = this.arRoom;
+    if (!room?.vertices?.length) return null;
+    const ccw = room.signedArea >= 0;
+    let collision = null;
+    for (let index = 0; index < room.vertices.length; index += 1) {
+      const current = room.vertices[index];
+      const next = room.vertices[(index + 1) % room.vertices.length];
+      const edgeX = next.x - current.x;
+      const edgeZ = next.z - current.z;
+      const length = Math.max(1e-6, Math.hypot(edgeX, edgeZ));
+      const normal = ccw
+        ? new THREE.Vector3(-edgeZ / length, 0, edgeX / length)
+        : new THREE.Vector3(edgeZ / length, 0, -edgeX / length);
+      const distance = (position.x - current.x) * normal.x + (position.z - current.z) * normal.z;
+      if (distance < radius && velocity.dot(normal) < 0 && (!collision || distance < collision.distance)) {
+        collision = { normal, distance };
+      }
+    }
+    if (!collision) return null;
+    return {
+      normal: collision.normal,
+      correction: radius - collision.distance,
+    };
+  }
+
   buildARRoomShell() {
     const room = this.arRoom || this.getARRoomConfig();
     const config = {
@@ -336,7 +500,12 @@ export class ArenaMode {
     for (let i = 0; i < count; i += 1) {
       const index = wave === 3 ? 3 : (wave - 1 + i) % 3;
       const [x, y, z] = positions[index];
-      this.spawnEnemy(new THREE.Vector3(x, y, z), roles[index], index === 3 ? COLORS.amber : COLORS.coral);
+      const spawn = new THREE.Vector3(x, y, z);
+      if (ar && !this.roomContainsPoint(spawn.x, spawn.z, 0.42)) {
+        const safe = this.clampPointToRoom(spawn.x, spawn.z, 0.48);
+        spawn.set(safe.x, room.floorY, safe.y);
+      }
+      this.spawnEnemy(spawn, roles[index], index === 3 ? COLORS.amber : COLORS.coral);
     }
   }
 
@@ -436,9 +605,7 @@ export class ArenaMode {
 
   getPlatformBelow(position) {
     if (this.isARPresentation && this.arRoom) {
-      const inside =
-        position.x >= this.arRoom.minX && position.x <= this.arRoom.maxX &&
-        position.z >= this.arRoom.minZ && position.z <= this.arRoom.maxZ;
+      const inside = this.roomContainsPoint(position.x, position.z, 0.04);
       if (inside && !this.isFloorOpening(position.x, position.z)) {
         return {
           x: this.arRoom.centerX,
@@ -864,9 +1031,9 @@ export class ArenaMode {
     if (this.isARPresentation && this.arRoom) {
       const headProbe = player.position.clone().add(new THREE.Vector3(0, this.world.eyeHeight, 0));
       this.handlePlayerOpening(headProbe);
-      const margin = 0.18;
-      player.position.x = THREE.MathUtils.clamp(player.position.x, this.arRoom.minX + margin, this.arRoom.maxX - margin);
-      player.position.z = THREE.MathUtils.clamp(player.position.z, this.arRoom.minZ + margin, this.arRoom.maxZ - margin);
+      const safe = this.clampPointToRoom(player.position.x, player.position.z, 0.18);
+      player.position.x = safe.x;
+      player.position.z = safe.y;
     }
     if (this.world.renderer.xr.isPresenting) this.world.setPlayerPosition(player.position);
     const supportProbe = this.world.renderer.xr.isPresenting ? this.getPlayerCenter() : player.position.clone();
@@ -929,7 +1096,7 @@ export class ArenaMode {
         this.arRoom.floorY,
         THREE.MathUtils.lerp(this.arRoom.minZ + margin, this.arRoom.maxZ - margin, this.random()),
       );
-      if (!this.isFloorOpening(candidate.x, candidate.z)) return candidate;
+      if (this.roomContainsPoint(candidate.x, candidate.z, margin) && !this.isFloorOpening(candidate.x, candidate.z)) return candidate;
     }
     if (force) {
       candidate.set(
@@ -977,16 +1144,9 @@ export class ArenaMode {
       }
       if (this.isARPresentation && this.arRoom) {
         const margin = 0.32;
-        enemy.mesh.position.x = THREE.MathUtils.clamp(
-          enemy.mesh.position.x,
-          this.arRoom.minX + margin,
-          this.arRoom.maxX - margin,
-        );
-        enemy.mesh.position.z = THREE.MathUtils.clamp(
-          enemy.mesh.position.z,
-          this.arRoom.minZ + margin,
-          this.arRoom.maxZ - margin,
-        );
+        const safe = this.clampPointToRoom(enemy.mesh.position.x, enemy.mesh.position.z, margin);
+        enemy.mesh.position.x = safe.x;
+        enemy.mesh.position.z = safe.y;
         this.handleEnemyOpening(enemy);
         if (enemy.dead) continue;
       }
