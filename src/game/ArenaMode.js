@@ -1104,6 +1104,8 @@ export class ArenaMode {
         this.arRoom.floorY,
         this.arRoom.minZ + this.arRoom.depth * 0.3,
       );
+      const safe = this.clampPointToRoom(candidate.x, candidate.z, margin);
+      candidate.set(safe.x, this.arRoom.floorY, safe.y);
     }
     return candidate;
   }
@@ -1296,6 +1298,12 @@ export class ArenaMode {
     } else if (position.y > bounds.ceilingY - 0.055 && velocity.y > 0) {
       position.y = bounds.ceilingY - 0.055;
       normal = new THREE.Vector3(0, -1, 0);
+    } else if (this.isARPresentation && this.arRoom?.vertices?.length) {
+      const collision = this.getPolygonBoundaryCollision(position, velocity, DISC_RADIUS);
+      if (collision) {
+        position.addScaledVector(collision.normal, collision.correction);
+        normal = collision.normal;
+      }
     } else if (position.x < bounds.minX + DISC_RADIUS && velocity.x < 0) {
       position.x = bounds.minX + DISC_RADIUS;
       normal = new THREE.Vector3(1, 0, 0);
