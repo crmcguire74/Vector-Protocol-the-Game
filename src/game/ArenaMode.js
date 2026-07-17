@@ -82,6 +82,7 @@ export class ArenaMode {
     this.playerPips = PIPS;
     this.matchState = 'intro'; // intro → fight → roundOver → reboot → advance/done
     this.stateTimer = 0;
+    this.playerMaxDiscs = 2; // grows on higher programs (set per round)
     this.rng = new RNG(0x51ede7 ^ (this.tier * 2654435761)); // per-match deterministic decisions
 
     this.score = 0;
@@ -741,8 +742,10 @@ export class ArenaMode {
     this.enemies.length = 0;
 
     this.playerPips = PIPS;
+    // More discs in play as the ladder escalates (SENTINEL-9 is a 3-disc duel).
+    this.playerMaxDiscs = this.tier >= 2 ? 3 : 2;
     this.player.health = 100;
-    this.player.discs = 2;
+    this.player.discs = this.playerMaxDiscs;
     this.player.velocity.set(0, 0, 0);
     this.player.grounded = true;
     this.matchState = 'intro';
@@ -1361,7 +1364,7 @@ export class ArenaMode {
   removeProjectile(index) {
     const [projectile] = this.projectiles.splice(index, 1);
     if (!projectile) return;
-    if (projectile.returnToAmmo) this.player.discs = Math.min(2, this.player.discs + 1);
+    if (projectile.returnToAmmo) this.player.discs = Math.min(this.playerMaxDiscs, this.player.discs + 1);
     if (projectile.trail) disposeObject(projectile.trail);
     disposeObject(projectile.mesh);
   }
@@ -2123,7 +2126,7 @@ export class ArenaMode {
       resource: this.player.shield,
       resourceLabel: this.charging
         ? `CHARGE ${Math.round(this.charge * 100)}%`
-        : `GUARD ${Math.round(this.player.shield)}% · ${this.player.discs}/2 DISCS`,
+        : `GUARD ${Math.round(this.player.shield)}% · ${this.player.discs}/${this.playerMaxDiscs} DISCS`,
       objective,
       combo: this.combo > 1 ? `x${this.combo} CHAIN` : '',
       speed: '',

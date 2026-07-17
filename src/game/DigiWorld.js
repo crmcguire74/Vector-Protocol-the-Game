@@ -1085,7 +1085,13 @@ export class DigiWorld {
     panel.name = 'vr-spatial-status-panel';
     panel.renderOrder = 1000;
     panel.userData.canvas = canvas;
-    this.scene.add(panel);
+    // Rigidly parent the panel to the camera so it is rock-solid in the view
+    // (no per-frame recomputation lag / swim) and fixed in the upper-left corner
+    // at a comfortable focal distance. It moves 1:1 with the head, never drifts.
+    panel.position.set(-0.66, 0.4, -1.35);
+    panel.rotation.set(0, 0.24, 0); // angle slightly inward toward the eye
+    panel.scale.setScalar(1.12);
+    this.camera.add(panel);
     this.xrHudPanel = panel;
     this.xrHudTexture = texture;
   }
@@ -1175,14 +1181,11 @@ export class DigiWorld {
 
   updateXRPanelTransforms() {
     if (!this.renderer.xr.isPresenting) return;
-    const cameraPosition = this.camera.getWorldPosition(new THREE.Vector3());
-    const cameraQuaternion = this.camera.getWorldQuaternion(new THREE.Quaternion());
-    if (this.xrHudPanel) {
-      const offset = new THREE.Vector3(-0.42, -0.26, -0.92).applyQuaternion(cameraQuaternion);
-      this.xrHudPanel.position.copy(cameraPosition).add(offset);
-      this.xrHudPanel.quaternion.copy(cameraQuaternion);
-    }
+    // The status panel is a rigid child of the camera (no manual transform).
+    // Only the transient message/pause panel is world-placed in front of the head.
     if (this.xrMessagePanel) {
+      const cameraPosition = this.camera.getWorldPosition(new THREE.Vector3());
+      const cameraQuaternion = this.camera.getWorldQuaternion(new THREE.Quaternion());
       const offset = new THREE.Vector3(0, 0, -2).applyQuaternion(cameraQuaternion);
       this.xrMessagePanel.position.copy(cameraPosition).add(offset);
       this.xrMessagePanel.quaternion.copy(cameraQuaternion);
@@ -1268,6 +1271,10 @@ export class DigiWorld {
   }
 
   async startGame(gameMode, requestedPresentation = 'desktop', roomPreset = 'portal') {
+    // Always hand control back to the live render loop. Deterministic test
+    // stepping (advanceTime) latches manualControl; starting a game must clear it
+    // so real keyboard/mouse/XR play runs every frame.
+    this.manualControl = false;
     this.audio.unlock();
     this.audio.setMusicTrack('combat');
     this.audio.startDrone();

@@ -159,8 +159,10 @@ export class BikeMode {
     this.round = 1;
     this.pWins = 0;
     this.eWins = 0;
-    this.cycleState = 'intro';
-    this.stateTimer = CYCLE_COUNTDOWN_SECONDS;
+    // Runs immediately like the classic arcade — no freeze. The eight-second
+    // safe vector (aggression grace) is the only ramp-up.
+    this.cycleState = 'run';
+    this.stateTimer = 0;
     this.tierSpeed = TIER_SPEED[this.tier];
 
     this.turnCooldown = 0;
@@ -218,7 +220,7 @@ export class BikeMode {
 
   announceRound() {
     this.world.announce(
-      `LIGHTFIELD  ·  TIER ${this.tier + 1}  ·  ROUND ${this.round}/3  ·  ${CYCLE_COUNTDOWN_SECONDS}s TO LAUNCH`,
+      `LIGHTFIELD  ·  TIER ${this.tier + 1}  ·  ROUND ${this.round}/3  ·  8s SAFE VECTOR`,
       2.4,
     );
   }
@@ -226,7 +228,11 @@ export class BikeMode {
   buildWorld() {
     this.environment = createEnvironment({ ar: this.world.presentation === 'ar' });
     this.root.add(this.environment);
-    if (this.environment.userData.panorama) this.environment.userData.panorama.material.opacity = 0.2;
+    // Tron Light Cycles arcade look: a clean grid field with no city skyline or
+    // cathedral backdrop — just the grid, the boundary, and the horizon glow.
+    if (this.environment.userData.city) this.environment.userData.city.visible = false;
+    if (this.environment.userData.panorama) this.environment.userData.panorama.visible = false;
+    if (this.environment.userData.clouds) this.environment.userData.clouds.material.opacity = 0.22;
     if (this.environment.userData.stars) this.environment.userData.stars.material.opacity = 0.32;
     const ambient = new THREE.HemisphereLight(0xb9fdff, 0x05020a, 1.2);
     const key = new THREE.DirectionalLight(0xe9ffff, 2.6);
@@ -728,7 +734,10 @@ export class BikeMode {
       mapTexture.minFilter = THREE.LinearFilter;
       const mapGroup = new THREE.Group();
       mapGroup.name = 'vr-fixed-upper-right-tactical-map';
-      mapGroup.position.set(0.69, 0.36, -0.92);
+      // Fixed in the upper-right of the view, pushed farther out and enlarged so
+      // it sits at a comfortable focal distance and stays readable at a glance.
+      mapGroup.position.set(1.2, 0.62, -1.7);
+      mapGroup.scale.setScalar(2.0);
       const mapBack = new THREE.Mesh(
         new THREE.PlaneGeometry(0.245, 0.245),
         new THREE.MeshBasicMaterial({ color: 0x010609, transparent: true, opacity: 0.92 }),
@@ -825,15 +834,12 @@ export class BikeMode {
     const b = this.bounds;
     const playerStart = Math.round(b * 0.84);
     this.spawnRider({ id: 0, x: 0, z: playerStart, direction: 0, role: 'PLAYER' });
-    // Rivals start far ahead in a readable parallel formation; the pattern
-    // alternates by round so each round opens differently.
-    const formations = [
-      [{ x: -Math.round(b * 0.5), z: -Math.round(b * 0.2) }, { x: 0, z: -Math.round(b * 0.35) }, { x: Math.round(b * 0.5), z: -Math.round(b * 0.2) }],
-      [{ x: -Math.round(b * 0.3), z: -Math.round(b * 0.45) }, { x: Math.round(b * 0.15), z: -Math.round(b * 0.5) }, { x: Math.round(b * 0.45), z: -Math.round(b * 0.12) }],
-    ];
-    const pattern = formations[(this.round - 1) % formations.length];
-    const roles = ['TRAPPER', 'HUNTER', 'ROGUE'];
-    pattern.forEach((pos, index) => this.spawnRider({ id: index + 1, x: pos.x, z: pos.z, direction: 0, role: roles[index] }));
+    // Rivals start ahead of the player and spread across the field so they are
+    // readable and cross the player's path (the original, well-liked layout).
+    // The player is faster and closes the distance; they hunt after the grace.
+    this.spawnRider({ id: 1, x: -Math.round(b * 0.33), z: Math.round(b * 0.3), direction: 0, role: 'TRAPPER' });
+    this.spawnRider({ id: 2, x: 0, z: Math.round(b * 0.08), direction: 0, role: 'HUNTER' });
+    this.spawnRider({ id: 3, x: Math.round(b * 0.33), z: -Math.round(b * 0.15), direction: 0, role: 'ROGUE' });
   }
 
   spawnRider({ id, x, z, direction, role }) {
@@ -1185,8 +1191,8 @@ export class BikeMode {
     this.emergencyStopCooldown = 0;
     this.roundElapsed = 0;
     this.spawnRiders();
-    this.cycleState = 'intro';
-    this.stateTimer = CYCLE_COUNTDOWN_SECONDS;
+    this.cycleState = 'run';
+    this.stateTimer = 0;
     this.world.setYaw(0);
     this.announceRound();
   }
@@ -2023,14 +2029,8 @@ export class BikeMode {
     this.elapsed += dt;
     if (this.world.phase !== 'running') return;
 
-    // Round machine: countdown intro → live run → result pause before advance.
-    if (this.cycleState === 'intro') {
-      this.stateTimer -= dt;
-      if (this.stateTimer <= 0) {
-        this.cycleState = 'run';
-        this.world.announce('GO // 8 SECOND SAFE VECTOR', 1.3);
-      }
-    } else if (this.cycleState === 'roundOver') {
+    // Round machine: live run, then a brief result pause before advancing.
+    if (this.cycleState === 'roundOver') {
       this.stateTimer -= dt;
       if (this.stateTimer <= 0) this.advanceCycleCampaign();
     }
@@ -2176,13 +2176,11 @@ export class BikeMode {
     const activeEnemies = this.riders.slice(1).filter((rider) => rider.alive).length;
     const pulseState = this.pulseCooldown <= 0 ? 'READY' : `${this.pulseCooldown.toFixed(1)}s`;
     const wins = '◆'.repeat(this.pWins) + '◇'.repeat(Math.max(0, 2 - this.pWins));
-    const aggressionState = this.cycleState === 'intro'
-      ? `LAUNCH ${Math.max(0, this.stateTimer).toFixed(1)}s`
-      : this.cycleState === 'roundOver'
-        ? (this.pWins > this.eWins ? 'ROUND WON' : 'ROUND LOST')
-        : this.aggressionGraceRemaining > 0
-          ? `SAFE VECTOR ${this.aggressionGraceRemaining.toFixed(1)}s`
-          : `LIGHTLINE ${player.trailOn ? 'LIVE' : 'OFF'}`;
+    const aggressionState = this.cycleState === 'roundOver'
+      ? (this.pWins > this.eWins ? 'ROUND WON' : 'ROUND LOST')
+      : this.aggressionGraceRemaining > 0
+        ? `SAFE VECTOR ${this.aggressionGraceRemaining.toFixed(1)}s`
+        : `LIGHTLINE ${player.trailOn ? 'LIVE' : 'OFF'}`;
     this.world.updateHUD({
       mode: `LIGHTFIELD · TIER ${this.tier + 1}`,
       score: Math.round(this.score),
