@@ -137,6 +137,13 @@ export class ArenaMode {
     // environment. The digital cathedral is revealed only inside impact breaches.
     this.environment = createEnvironment({ ar: this.isARPresentation });
     this.root.add(this.environment);
+    // Clean TRON Legacy look: drop the city skyline and cathedral panorama so the
+    // platforms float over a pure neon grid abyss under a deep-black sky.
+    if (!this.isARPresentation) {
+      if (this.environment.userData.city) this.environment.userData.city.visible = false;
+      if (this.environment.userData.panorama) this.environment.userData.panorama.visible = false;
+      if (this.environment.userData.clouds) this.environment.userData.clouds.material.opacity = 0.14;
+    }
     const ambient = new THREE.HemisphereLight(COLORS.ice, 0x02040a, 1.45);
     const key = new THREE.DirectionalLight(0xd7ffff, 3.2);
     key.position.set(7, 16, 9);
@@ -202,41 +209,47 @@ export class ArenaMode {
       // sits well below them so falling between pads costs an integrity pip.
       this.voidDeathY = -3.2;
 
-      const voidGrid = new THREE.GridHelper(96, 64, COLORS.violet, 0x10233b);
+      // A bright TRON grid abyss the platforms float over: a near grid, a vast
+      // faint outer grid for depth, and a horizon glow line. No clutter.
+      const voidGrid = new THREE.GridHelper(120, 80, COLORS.cyan, 0x0a2436);
       voidGrid.position.y = -8;
       voidGrid.material.transparent = true;
-      voidGrid.material.opacity = 0.24;
+      voidGrid.material.opacity = 0.32;
       this.root.add(voidGrid);
       this.voidGrid = voidGrid;
 
+      const outerGrid = new THREE.GridHelper(360, 120, COLORS.violet, 0x081826);
+      outerGrid.position.y = -8.4;
+      outerGrid.material.transparent = true;
+      outerGrid.material.opacity = 0.12;
+      this.root.add(outerGrid);
+
+      // A faint glass floor beneath the grid catches the platform glow.
+      const abyssFloor = new THREE.Mesh(
+        new THREE.PlaneGeometry(360, 360),
+        new THREE.MeshBasicMaterial({ color: 0x010305, transparent: true, opacity: 0.9, depthWrite: false }),
+      );
+      abyssFloor.rotation.x = -Math.PI / 2;
+      abyssFloor.position.y = -8.5;
+      this.root.add(abyssFloor);
+
+      // Cyan horizon band around the arena edge for the deep-Grid horizon read.
+      const horizon = new THREE.Mesh(
+        new THREE.CylinderGeometry(90, 90, 5, 64, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: COLORS.cyan,
+          transparent: true,
+          opacity: 0.18,
+          side: THREE.BackSide,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      horizon.position.y = -6.5;
+      this.root.add(horizon);
+
       this.driftColumns = [];
-      for (let i = 0; i < 22; i += 1) {
-        const column = new THREE.Mesh(
-          new THREE.OctahedronGeometry(0.28 + this.random() * 0.9, 0),
-          new THREE.MeshStandardMaterial({
-            color: 0x07101b,
-            emissive: i % 3 === 0 ? COLORS.violet : COLORS.cyan,
-            emissiveIntensity: 0.22,
-            metalness: 0.8,
-            roughness: 0.28,
-          }),
-        );
-        const angle = this.random() * Math.PI * 2;
-        const radius = 22 + this.random() * 22;
-        column.position.set(Math.cos(angle) * radius, -2 + this.random() * 13, Math.sin(angle) * radius);
-        column.scale.y = 2 + this.random() * 7;
-        column.rotation.set(this.random(), this.random(), this.random());
-        this.root.add(column);
-        this.driftColumns.push({
-          mesh: column,
-          baseY: column.position.y,
-          phase: this.random() * Math.PI * 2,
-          bobRate: 0.2 + this.random() * 0.3,
-          bobHeight: 0.25 + this.random() * 0.45,
-          spin: (this.random() - 0.5) * 0.08,
-          pulseRate: 0.6 + this.random() * 1.2,
-        });
-      }
     }
   }
 
@@ -2089,7 +2102,7 @@ export class ArenaMode {
     updateShockwaves(this.shockwaves, dt, this.world.camera);
     updateEnvironment(this.environment, this.elapsed, dt);
     if (this.voidGrid) {
-      this.voidGrid.material.opacity = 0.22 + Math.sin(this.elapsed * 0.7) * 0.05;
+      this.voidGrid.material.opacity = 0.3 + Math.sin(this.elapsed * 0.7) * 0.06;
     }
     if (this.driftColumns) {
       for (const column of this.driftColumns) {

@@ -1062,51 +1062,66 @@ export function createHumanoid(color = COLORS.coral, role = 'STRIKER') {
   return root;
 }
 
+// A TRON identity disc: a sleek near-black glass body with a single bright
+// glowing rim, concentric ring detail, and a luminous hub. Clean and modern —
+// not a textured frisbee.
 export function createDisc(color = COLORS.cyan, hostile = false) {
   const root = new THREE.Group();
-  root.name = hostile ? 'hostile-arc-disc' : 'player-arc-disc';
+  root.name = hostile ? 'hostile-identity-disc' : 'player-identity-disc';
   const rotor = new THREE.Group();
-  rotor.name = 'horizontal-frisbee-rotor';
+  rotor.name = 'identity-disc-rotor';
   root.add(rotor);
-  const shell = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.34, 0.34, 0.075, 12, 1, false),
+
+  // Sleek dark disc body — polished obsidian glass, barely-lit.
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.3, 0.3, 0.045, 40, 1, false),
     new THREE.MeshStandardMaterial({
-      color: hostile ? 0x6a3034 : 0x4d6268,
-      map: getArmorTexture(),
-      metalness: 0.9,
-      roughness: 0.16,
+      color: 0x05080c,
+      metalness: 0.95,
+      roughness: 0.12,
       emissive: color,
-      emissiveIntensity: 0.5,
+      emissiveIntensity: 0.14,
     }),
   );
-  shell.castShadow = true;
-  rotor.add(shell);
+  body.castShadow = true;
+  rotor.add(body);
+
+  // Bright glowing outer rim — the identity-disc signature edge (blooms).
   const rim = new THREE.Mesh(
-    new THREE.TorusGeometry(0.3, 0.055, 7, 32),
-    new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(0.72) }),
+    new THREE.TorusGeometry(0.305, 0.026, 12, 56),
+    new THREE.MeshBasicMaterial({ color, toneMapped: false }),
   );
   rim.rotation.x = Math.PI / 2;
   rotor.add(rim);
-  const core = new THREE.Mesh(
-    new THREE.CircleGeometry(0.11, 12),
-    new THREE.MeshBasicMaterial({
-      color: 0xb8e6ea,
-      transparent: true,
-      opacity: 0.72,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-    }),
+
+  // Concentric inner ring detail on both faces.
+  for (const face of [0.025, -0.025]) {
+    const innerRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.185, 0.007, 8, 44),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, toneMapped: false }),
+    );
+    innerRing.rotation.x = Math.PI / 2;
+    innerRing.position.y = face;
+    rotor.add(innerRing);
+  }
+
+  // Luminous hub.
+  const hub = new THREE.Mesh(
+    new THREE.CircleGeometry(0.065, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.92, side: THREE.DoubleSide, toneMapped: false }),
   );
-  core.rotation.x = -Math.PI / 2;
-  core.position.y = 0.041;
-  rotor.add(core);
+  hub.rotation.x = -Math.PI / 2;
+  hub.position.y = 0.026;
+  rotor.add(hub);
+
+  // Soft additive halo so the rim reads at distance.
   const glow = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.08, 1.08),
+    new THREE.PlaneGeometry(0.92, 0.92),
     new THREE.MeshBasicMaterial({
       map: glowTexture(`#${new THREE.Color(color).getHexString()}`),
       color,
       transparent: true,
-      opacity: 0.48,
+      opacity: 0.4,
       side: THREE.DoubleSide,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -1114,8 +1129,9 @@ export function createDisc(color = COLORS.cyan, hostile = false) {
     }),
   );
   glow.rotation.x = -Math.PI / 2;
-  glow.position.y = 0.006;
+  glow.position.y = 0.004;
   rotor.add(glow);
+
   root.userData.rotor = rotor;
   root.userData.flightNormal = new THREE.Vector3(0, 1, 0);
   return root;

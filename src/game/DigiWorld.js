@@ -51,6 +51,7 @@ class ProceduralAudio {
     this.context = null;
     this.master = null;
     this.drone = null;
+    this.engine = null;
     this.musicTrack = 'hub';
     this.musicUnlocked = false;
     this.musicUnavailable = new Set();
@@ -181,6 +182,56 @@ class ProceduralAudio {
     if (!this.drone) return;
     for (const oscillator of this.drone.oscillators) oscillator.stop();
     this.drone = null;
+  }
+
+  // Continuous light-cycle engine: detuned saw oscillators through a resonant
+  // low-pass whose pitch, cutoff, and gain rise with speed for the TRON "zoom".
+  startEngine() {
+    if (!this.context || !this.master || this.engine) return;
+    const bus = this.context.createGain();
+    bus.gain.value = 0.0001;
+    const filter = this.context.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 700;
+    filter.Q.value = 7;
+    bus.connect(filter);
+    filter.connect(this.master);
+    const oscillators = [1, 1.008, 0.5].map((mult, index) => {
+      const oscillator = this.context.createOscillator();
+      oscillator.type = index === 2 ? 'sine' : 'sawtooth';
+      oscillator.frequency.value = 68 * mult;
+      oscillator.connect(bus);
+      oscillator.start();
+      return oscillator;
+    });
+    this.engine = { bus, filter, oscillators };
+  }
+
+  // speed01 in [0,1]; boosting adds a bright surge.
+  setEngineIntensity(speed01 = 0, boosting = false) {
+    if (!this.engine || !this.context) return;
+    const now = this.context.currentTime;
+    const clamped = Math.max(0, Math.min(1, speed01));
+    const base = 58 + clamped * 118 + (boosting ? 46 : 0);
+    this.engine.oscillators.forEach((oscillator, index) => {
+      const mult = index === 2 ? 0.5 : index === 1 ? 1.008 : 1;
+      oscillator.frequency.setTargetAtTime(base * mult, now, 0.09);
+    });
+    this.engine.filter.frequency.setTargetAtTime(520 + clamped * 2700 + (boosting ? 1300 : 0), now, 0.1);
+    this.engine.bus.gain.setTargetAtTime(0.014 + clamped * 0.03 + (boosting ? 0.022 : 0), now, 0.12);
+  }
+
+  stopEngine() {
+    if (!this.engine) return;
+    const now = this.context ? this.context.currentTime : 0;
+    try {
+      this.engine.bus.gain.cancelScheduledValues(now);
+      this.engine.bus.gain.setTargetAtTime(0.0001, now, 0.05);
+      for (const oscillator of this.engine.oscillators) oscillator.stop(now + 0.2);
+    } catch {
+      /* context may already be closed */
+    }
+    this.engine = null;
   }
 }
 
@@ -1085,13 +1136,14 @@ export class DigiWorld {
     panel.name = 'vr-spatial-status-panel';
     panel.renderOrder = 1000;
     panel.userData.canvas = canvas;
-    // Rigidly parent the panel to the camera so it is rock-solid in the view
-    // (no per-frame recomputation lag / swim) and fixed in the upper-left corner
-    // at a comfortable focal distance. It moves 1:1 with the head, never drifts.
-    panel.position.set(-0.66, 0.4, -1.35);
-    panel.rotation.set(0, 0.24, 0); // angle slightly inward toward the eye
-    panel.scale.setScalar(1.12);
-    this.camera.add(panel);
+    // Parent the panel to the PLAYER RIG, not the head. The rig carries body
+    // position + heading but not head rotation, so the panel is fixed in the
+    // cockpit's upper-left: you can freely turn your head to look at it and it
+    // stays put (no swimming glued-to-your-face HUD).
+    panel.position.set(-0.7, 1.45, -1.55);
+    panel.rotation.set(0, 0.26, 0); // angle slightly inward toward the eye
+    panel.scale.setScalar(1.18);
+    this.cameraRig.add(panel);
     this.xrHudPanel = panel;
     this.xrHudTexture = texture;
   }

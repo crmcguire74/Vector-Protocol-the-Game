@@ -215,6 +215,7 @@ export class BikeMode {
     if (!this.isTabletopAR) this.buildCockpit();
     this.world.setEyeHeight(0.88);
     this.world.setYaw(0);
+    this.world.audio?.startEngine?.();
     this.announceRound();
   }
 
@@ -733,10 +734,11 @@ export class BikeMode {
       mapTexture.colorSpace = THREE.SRGBColorSpace;
       mapTexture.minFilter = THREE.LinearFilter;
       const mapGroup = new THREE.Group();
-      mapGroup.name = 'vr-fixed-upper-right-tactical-map';
-      // Fixed in the upper-right of the view, pushed farther out and enlarged so
-      // it sits at a comfortable focal distance and stays readable at a glance.
-      mapGroup.position.set(1.2, 0.62, -1.7);
+      mapGroup.name = 'cockpit-fixed-upper-right-tactical-map';
+      // Fixed in the cockpit's upper-right (parented to the rig below, not the
+      // head), pushed farther out and enlarged so it sits at a comfortable focal
+      // distance and stays put when you turn your head to read it.
+      mapGroup.position.set(1.05, 1.55, -1.7);
       mapGroup.scale.setScalar(2.0);
       const mapBack = new THREE.Mesh(
         new THREE.PlaneGeometry(0.245, 0.245),
@@ -754,9 +756,9 @@ export class BikeMode {
       mapFrame.rotation.z = Math.PI / 4;
       mapFrame.position.z = 0.008;
       mapGroup.add(mapBack, mapPanel, mapFrame);
-      // Keep navigation information head-locked instead of inheriting the
-      // motorcycle's roll. This remains readable while the chassis leans.
-      this.world.camera.add(mapGroup);
+      // Cockpit-locked (rig), NOT head-locked: turns with the bike heading but
+      // not with your head, so it stays fixed in the upper-right as you look around.
+      this.world.cameraRig.add(mapGroup);
       tacticalMap = {
         canvas: mapCanvas,
         context: mapCanvas.getContext('2d'),
