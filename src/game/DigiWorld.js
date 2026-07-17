@@ -270,18 +270,21 @@ export class DigiWorld {
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.86;
+    // Slightly lower exposure keeps the glass-black Grid deep so neon lines pop.
+    this.renderer.toneMappingExposure = 0.82;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.xr.enabled = true;
 
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    // Restrained bloom (strength/threshold tuned up) so only the brightest neon
+    // edges halo — the TRON Grid should read as crisp lines, not a wash.
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      0.52,
-      0.22,
-      0.88,
+      0.42,
+      0.2,
+      0.9,
     );
     this.composer.addPass(this.bloomPass);
     this.afterimagePass = new AfterimagePass(0.74);

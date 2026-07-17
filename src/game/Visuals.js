@@ -98,14 +98,17 @@ export function getArmorTexture() {
   return armorTexture;
 }
 
+// TRON: Legacy Grid palette — player energy is clean cyan/white, adversaries
+// are orange, and secondary structure reads as cool electric blue on black.
 export const COLORS = {
   void: 0x02050b,
-  ink: 0x07111a,
-  cyan: 0x39f6ff,
-  ice: 0xc9ffff,
-  coral: 0xff4d65,
-  amber: 0xffc857,
-  violet: 0x885cff,
+  ink: 0x061019,
+  cyan: 0x36e6ff,
+  ice: 0xd8ffff,
+  orange: 0xff7a18,
+  coral: 0xff5a2c,
+  amber: 0xffa12e,
+  violet: 0x2f6bff, // repurposed as electric-blue Grid accent
   lime: 0x7dffb2,
 };
 

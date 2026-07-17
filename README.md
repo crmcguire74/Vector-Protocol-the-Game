@@ -1,13 +1,13 @@
 # Vector Protocol
 
-Vector Protocol is an original first-person digital-sport game built with Three.js and WebXR. It contains two complete arcade loops:
+Vector Protocol is an original first-person digital-sport game built with Three.js and WebXR — a modern take on Discs of Tron and the light-cycle duel, rendered in a clean TRON: Legacy Grid aesthetic (cyan player, orange adversaries, electric-blue Grid on glass-black). It contains two complete campaign loops:
 
-- **Shard Arena** — throw and recall arc discs, parry hostile throws, dash, jump between circular platforms, and defeat increasingly dangerous humanoid Sentinels.
-- **Lightline Pursuit** — pilot a first-person light runner, lay a lethal energy wall, out-turn three tactical rivals, boost, brake, and cut openings with a disruption pulse.
+- **Shard Arena** — a best-of-3 disc duel up an authored program ladder: **BIT-3 → VANTA → SENTINEL-9**, across the shrinking, reconfiguring **PROVING RING → SHARD SPIRE → CORE VAULT** arenas. Throw and recall flat frisbee discs, bank them off walls and obstacles, guard the front arc, dash and jump between platforms (falling off costs a life), and read each program's telegraphs, feints, and reactive guard. Three integrity pips per round; win two rounds to decompile a program; beat all three to win the match. Progress persists.
+- **Lightline Pursuit** — a first-person light-cycle survival against three tactical rivals across three speed tiers, best-of-3 per tier. Lay a lethal energy wall, out-turn the pack after an eight-second safe vector, boost, brake, spend one of three emergency stops, and cut openings with a disruption pulse. Cleared tiers persist.
 
 The same application supports desktop presentation, `immersive-vr`, and `immersive-ar`. Unsupported immersive modes automatically launch a desktop spatial preview so the content remains inspectable without a headset.
 
-The current visual pass uses skinned, articulated digital-human opponents with real sprint cycles and hand-origin throwing animation. Lightline Pursuit uses sculpted motorcycles and a detailed first-person cockpit with curved glass, live instruments, visible controls, wheel/fork/suspension motion, and progressive corner lean.
+Opponents are skinned, articulated digital-human Sentinels with real sprint cycles and hand-origin throwing animation. Lightline Pursuit uses sculpted motorcycles and a detailed first-person cockpit with curved glass, live instruments, visible controls, wheel/fork/suspension motion, and progressive corner lean. Campaign progress is saved in `localStorage` and can be cleared from the menu's **Reset** control.
 
 ## Run locally
 
@@ -58,7 +58,7 @@ In VR, a controller trigger charges/releases a disc or boosts the bike; grip gua
 
 Immersive AR requests a WebXR `bounded-floor` reference space and transforms its polygon into the placed game root. The player must confirm a cyan floor marker before combat begins; walls and surfaces tilted more than about 20° are rejected, and pitch/roll are removed from the final anchor so actors remain upright. The accepted room polygon governs player support, Sentinel spawning and roaming, containment, and disc banks. If the device does not expose usable bounds, the menu offers explicit small, large, and compact room-size fallbacks.
 
-AR also requests hit testing, anchors, plane detection, depth sensing, light estimation, and DOM overlay as optional capabilities. The room remains the visible environment: only faint calibration lines are added before combat. Disc impacts create localized persistent wall/floor openings with opaque fractured edges and animated 3D neon tunnels—moving rings, lattice, helixes, and particles replace the previous flat portal image.
+AR also requests hit testing, anchors, plane detection, depth sensing, light estimation, and DOM overlay as optional capabilities. The room remains the visible environment: only faint calibration lines are added before combat. A disc striking a real **wall** also cracks the **floor** open beneath it — the floor breaks apart into tumbling neon-edged shards revealing an animated 3D neon tunnel (moving rings, lattice, helixes, particles) of the digital world below. Falling into a floor breach costs a life; a disc that knocks a fighter through an opening costs two. The program roams throughout the mapped room footprint.
 
 ## Testability
 

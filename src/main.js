@@ -1,6 +1,24 @@
 import { DigiWorld } from './game/DigiWorld.js';
+import { Store } from './game/store.js';
 
 const byId = (id) => document.getElementById(id);
+
+const DISC_PROGRAMS = ['BIT-3', 'VANTA', 'SENTINEL-9'];
+
+function renderCampaignProgress() {
+  const discWins = Store.get('discWins') || 0;
+  const cycleTier = Store.get('cycleTier') || 0;
+  const discEl = byId('campaign-disc');
+  const cycleEl = byId('campaign-cycle');
+  if (discEl) {
+    discEl.textContent = discWins >= DISC_PROGRAMS.length
+      ? 'Discs · ALL PROGRAMS CLEARED'
+      : `Discs · ${DISC_PROGRAMS[discWins]}`;
+  }
+  if (cycleEl) {
+    cycleEl.textContent = cycleTier >= 3 ? 'Cycles · MASTERED' : `Cycles · Tier ${cycleTier + 1}`;
+  }
+}
 
 const ui = {
   canvas: byId('game-canvas'),
@@ -170,9 +188,15 @@ try {
   ui.musicToggle.addEventListener('click', () => world.toggleMusic());
   ui.resumeButton.addEventListener('click', () => world.resume());
   ui.restartButton.addEventListener('click', () => world.restart());
-  ui.exitButton.addEventListener('click', () => world.goToMenu());
+  ui.exitButton.addEventListener('click', () => { world.goToMenu(); renderCampaignProgress(); });
   ui.againButton.addEventListener('click', () => world.restart());
-  ui.menuButton.addEventListener('click', () => world.goToMenu());
+  ui.menuButton.addEventListener('click', () => { world.goToMenu(); renderCampaignProgress(); });
+  byId('reset-progress')?.addEventListener('click', () => {
+    Store.reset();
+    renderCampaignProgress();
+    world.toast?.('CAMPAIGN PROGRESS RESET', 1.4);
+  });
+  renderCampaignProgress();
   ui.arPlaceButton.addEventListener('click', () => world.queueARPlacementConfirmation());
   ui.xrExit.addEventListener('click', () => world.xrSession?.end());
   document.addEventListener('visibilitychange', () => world.handleVisibility(document.hidden));

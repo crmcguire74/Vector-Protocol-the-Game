@@ -52,8 +52,9 @@
     --cyan: #58f2ff;
     --cyan-hot: #c8fbff;
     --cyan-dim: #14616b;
-    --coral: #ff4f63;
-    --violet: #885cff;
+    --orange: #ff8a2a;
+    --coral: #ff5a2c;
+    --violet: #4f6bff;
     --white: #eefcff;
     --mist: #8ba2aa;
     --line: rgb(117 225 235 / 18%);
@@ -1159,6 +1160,58 @@
     color: #83989e;
     font: 500 0.51rem/1.55 var(--mono);
     letter-spacing: 0.015em;
+  }
+
+  .campaign-status {
+    display: flex;
+    margin-top: 1.15rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.6rem 0.85rem;
+    background: rgb(6 14 21 / 55%);
+    border: 1px solid var(--line);
+    clip-path: var(--edge);
+  }
+
+  .campaign-status__label {
+    color: #658087;
+    font: 500 0.44rem/1 var(--mono);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 0.32rem;
+  }
+
+  .campaign-status__value {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    color: var(--cyan-hot);
+    font: 500 0.52rem/1.1 var(--mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .campaign-status__value span[aria-hidden] { color: var(--cyan-dim); }
+
+  .ghost-button {
+    flex-shrink: 0;
+    padding: 0.5rem 0.9rem;
+    background: transparent;
+    border: 1px solid var(--line-strong);
+    color: var(--mist);
+    font: 600 0.48rem/1 var(--mono);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    cursor: pointer;
+    clip-path: polygon(0 0, calc(100% - 0.5rem) 0, 100% 0.5rem, 100% 100%, 0.5rem 100%, 0 calc(100% - 0.5rem));
+    transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+  }
+
+  .ghost-button:hover {
+    color: var(--orange);
+    border-color: var(--orange);
+    background: rgb(255 138 42 / 8%);
   }
 
   .selection-readout {

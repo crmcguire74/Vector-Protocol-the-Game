@@ -14,6 +14,17 @@ import {
   updateEnvironment,
   updateShockwaves,
 } from './Visuals.js';
+import { Store, clamp } from './store.js';
+
+// Three speed tiers, best-of-3 per tier, cleared tiers persist to the Store.
+const CYCLE_TIERS = 3;
+const TIER_SPEED = [
+  { cruise: 7.7, boost: 11.2, brake: 4.9, ai: 6.6 },
+  { cruise: 9.0, boost: 12.8, brake: 5.6, ai: 7.9 },
+  { cruise: 10.4, boost: 14.6, brake: 6.4, ai: 9.2 },
+];
+const TIER_AGGRESSION = [0.008, 0.02, 0.04]; // per-decision cut-off chance
+const CYCLE_COUNTDOWN_SECONDS = 3;
 
 const DIRECTIONS = [
   { x: 0, z: -1 },
@@ -141,7 +152,17 @@ export class BikeMode {
     this.elapsed = 0;
     this.score = 0;
     this.kills = 0;
-    this.wave = 1;
+
+    // Campaign: tier (persisted), best-of-3 rounds, and a countdown/run/result
+    // state machine mirroring the disc campaign.
+    this.tier = clamp(Store.get('cycleTier') || 0, 0, CYCLE_TIERS - 1);
+    this.round = 1;
+    this.pWins = 0;
+    this.eWins = 0;
+    this.cycleState = 'intro';
+    this.stateTimer = CYCLE_COUNTDOWN_SECONDS;
+    this.tierSpeed = TIER_SPEED[this.tier];
+
     this.turnCooldown = 0;
     this.pulseCooldown = 0;
     this.roundElapsed = 0;
@@ -192,7 +213,14 @@ export class BikeMode {
     if (!this.isTabletopAR) this.buildCockpit();
     this.world.setEyeHeight(0.88);
     this.world.setYaw(0);
-    this.world.announce('LIGHTLINE PURSUIT // 8 SECOND SAFE VECTOR', 2.5);
+    this.announceRound();
+  }
+
+  announceRound() {
+    this.world.announce(
+      `LIGHTFIELD  ·  TIER ${this.tier + 1}  ·  ROUND ${this.round}/3  ·  ${CYCLE_COUNTDOWN_SECONDS}s TO LAUNCH`,
+      2.4,
+    );
   }
 
   buildWorld() {
@@ -794,11 +822,18 @@ export class BikeMode {
 
   spawnRiders() {
     this.riders.length = 0;
-    const playerStart = Math.round(this.bounds * 0.84);
+    const b = this.bounds;
+    const playerStart = Math.round(b * 0.84);
     this.spawnRider({ id: 0, x: 0, z: playerStart, direction: 0, role: 'PLAYER' });
-    this.spawnRider({ id: 1, x: -Math.round(this.bounds * 0.33), z: Math.round(this.bounds * 0.3), direction: 0, role: 'TRAPPER' });
-    this.spawnRider({ id: 2, x: 0, z: Math.round(this.bounds * 0.08), direction: 0, role: 'HUNTER' });
-    this.spawnRider({ id: 3, x: Math.round(this.bounds * 0.33), z: -Math.round(this.bounds * 0.15), direction: 0, role: 'ROGUE' });
+    // Rivals start far ahead in a readable parallel formation; the pattern
+    // alternates by round so each round opens differently.
+    const formations = [
+      [{ x: -Math.round(b * 0.5), z: -Math.round(b * 0.2) }, { x: 0, z: -Math.round(b * 0.35) }, { x: Math.round(b * 0.5), z: -Math.round(b * 0.2) }],
+      [{ x: -Math.round(b * 0.3), z: -Math.round(b * 0.45) }, { x: Math.round(b * 0.15), z: -Math.round(b * 0.5) }, { x: Math.round(b * 0.45), z: -Math.round(b * 0.12) }],
+    ];
+    const pattern = formations[(this.round - 1) % formations.length];
+    const roles = ['TRAPPER', 'HUNTER', 'ROGUE'];
+    pattern.forEach((pos, index) => this.spawnRider({ id: index + 1, x: pos.x, z: pos.z, direction: 0, role: roles[index] }));
   }
 
   spawnRider({ id, x, z, direction, role }) {
@@ -842,7 +877,7 @@ export class BikeMode {
       direction,
       queuedTurn: 0,
       progress: 0,
-      speed: id === 0 ? 7.7 : 6.5 + this.random() * 1.4,
+      speed: id === 0 ? this.tierSpeed.cruise : this.tierSpeed.ai * (0.95 + this.random() * 0.12),
       mesh,
       alive: true,
       trailOn: true,
@@ -900,17 +935,27 @@ export class BikeMode {
       if (clear === 0) continue;
       let score = clear * 5 + this.random() * 7;
       if (turn === 0) score += 3;
+      // Higher tiers hunt harder and cut off more often.
+      const aggr = 1 + this.tier * 0.7;
       if (aggressive && rider.role === 'HUNTER' && player?.alive) {
         const nextX = rider.x + vector.x * 3;
         const nextZ = rider.z + vector.z * 3;
         const before = Math.abs(rider.x - player.x) + Math.abs(rider.z - player.z);
         const after = Math.abs(nextX - player.x) + Math.abs(nextZ - player.z);
-        score += (before - after) * 1.4;
+        score += (before - after) * 1.4 * aggr;
       }
       if (aggressive && rider.role === 'TRAPPER' && player?.alive) {
-        if (Math.abs(rider.x - player.x) < 5 || Math.abs(rider.z - player.z) < 5) score += turn === 0 ? -2 : 6;
+        if (Math.abs(rider.x - player.x) < 5 || Math.abs(rider.z - player.z) < 5) score += (turn === 0 ? -2 : 6) * aggr;
       }
-      if (aggressive && rider.role === 'ROGUE') score += this.random() * 10;
+      if (aggressive && rider.role === 'ROGUE') score += this.random() * 10 * aggr;
+      // Deliberate cut-off: a tier-scaled chance to steer into the player's lane.
+      if (aggressive && player?.alive && this.random() < TIER_AGGRESSION[this.tier]) {
+        const nextX = rider.x + vector.x * 4;
+        const nextZ = rider.z + vector.z * 4;
+        const before = Math.abs(rider.x - player.x) + Math.abs(rider.z - player.z);
+        const after = Math.abs(nextX - player.x) + Math.abs(nextZ - player.z);
+        score += (before - after) * 6;
+      }
       if (score > bestScore) {
         bestScore = score;
         bestTurn = turn;
@@ -1063,10 +1108,7 @@ export class BikeMode {
       rider.health -= 50;
       this.world.damageFeedback(50);
       if (rider.health <= 0) {
-        this.world.endGame(false, {
-          title: 'LIGHTLINE COLLAPSE',
-          detail: `${this.kills} eliminations · Signal ${Math.round(this.score).toLocaleString()}`,
-        });
+        this.roundOver(false);
       } else {
         rider.respawnTimer = 1.25;
         this.world.announce('ARMOR SHATTERED // ONE LAYER REMAINS', 1.4);
@@ -1075,14 +1117,78 @@ export class BikeMode {
       this.kills += 1;
       const bonus = collisionOwner === 0 ? 900 : 350;
       this.score += bonus;
-      this.world.announce(`${rider.role} ERASED // +${bonus}`, 1.1);
-      if (this.riders.slice(1).every((enemy) => !enemy.alive)) {
+      const remaining = this.riders.slice(1).filter((enemy) => enemy.alive).length;
+      this.world.announce(remaining === 1 ? `${rider.role} ERASED // LAST CYCLE RUNNING` : `${rider.role} ERASED // +${bonus}`, 1.1);
+      if (remaining === 0) this.roundOver(true);
+    }
+  }
+
+  roundOver(playerWon) {
+    if (this.cycleState === 'roundOver' || this.cycleState === 'done') return;
+    this.cycleState = 'roundOver';
+    this.stateTimer = playerWon ? 2.2 : 2.8;
+    if (playerWon) {
+      this.pWins += 1;
+      this.score += 800;
+      this.world.announce(`ROUND WON  ·  ${this.pWins}–${this.eWins}`, 2.0);
+    } else {
+      this.eWins += 1;
+      this.world.announce(`ROUND LOST  ·  ${this.pWins}–${this.eWins}`, 2.4);
+      this.world.pulseVignette?.();
+    }
+  }
+
+  advanceCycleCampaign() {
+    if (this.pWins >= 2) {
+      Store.set('cycleTier', Math.max(Store.get('cycleTier') || 0, this.tier + 1));
+      if (this.tier >= CYCLE_TIERS - 1) {
+        this.cycleState = 'done';
         this.world.endGame(true, {
-          title: 'THE GRID IS YOURS',
+          title: 'LIGHTFIELD MASTERED // ALL TIERS CLEARED',
           detail: `${this.kills} eliminations · Signal ${Math.round(this.score).toLocaleString()}`,
         });
+        return;
       }
+      this.tier += 1;
+      this.tierSpeed = TIER_SPEED[this.tier];
+      this.pWins = 0;
+      this.eWins = 0;
+      this.round = 1;
+      this.startCycleRound();
+      return;
     }
+    if (this.eWins >= 2) {
+      this.cycleState = 'done';
+      this.world.endGame(false, {
+        title: 'LIGHTLINE COLLAPSE',
+        detail: `Held at tier ${this.tier + 1} · Signal ${Math.round(this.score).toLocaleString()}`,
+      });
+      return;
+    }
+    this.round += 1;
+    this.startCycleRound();
+  }
+
+  clearArenaState() {
+    for (const trail of this.trails) if (trail.mesh) disposeObject(trail.mesh);
+    this.trails.length = 0;
+    this.occupancy.clear();
+    for (const rider of this.riders) if (rider.mesh) disposeObject(rider.mesh);
+    this.riders.length = 0;
+  }
+
+  startCycleRound() {
+    this.clearArenaState();
+    this.aggressionGraceRemaining = this.aggressionGraceDuration;
+    this.emergencyStopsRemaining = EMERGENCY_STOPS_PER_ROUND;
+    this.emergencyStopTimer = 0;
+    this.emergencyStopCooldown = 0;
+    this.roundElapsed = 0;
+    this.spawnRiders();
+    this.cycleState = 'intro';
+    this.stateTimer = CYCLE_COUNTDOWN_SECONDS;
+    this.world.setYaw(0);
+    this.announceRound();
   }
 
   respawnPlayer(rider) {
@@ -1916,15 +2022,31 @@ export class BikeMode {
   update(dt) {
     this.elapsed += dt;
     if (this.world.phase !== 'running') return;
-    this.roundElapsed += dt;
+
+    // Round machine: countdown intro → live run → result pause before advance.
+    if (this.cycleState === 'intro') {
+      this.stateTimer -= dt;
+      if (this.stateTimer <= 0) {
+        this.cycleState = 'run';
+        this.world.announce('GO // 8 SECOND SAFE VECTOR', 1.3);
+      }
+    } else if (this.cycleState === 'roundOver') {
+      this.stateTimer -= dt;
+      if (this.stateTimer <= 0) this.advanceCycleCampaign();
+    }
+    const simActive = this.cycleState === 'run';
+
+    if (simActive) this.roundElapsed += dt;
     this.turnCooldown = Math.max(0, this.turnCooldown - dt);
     this.pulseCooldown = Math.max(0, this.pulseCooldown - dt);
     this.emergencyStopTimer = Math.max(0, this.emergencyStopTimer - dt);
     this.emergencyStopCooldown = Math.max(0, this.emergencyStopCooldown - dt);
-    const previousGrace = this.aggressionGraceRemaining;
-    this.aggressionGraceRemaining = Math.max(0, this.aggressionGraceRemaining - dt);
-    if (previousGrace > 0 && this.aggressionGraceRemaining === 0) {
-      this.world.announce('SAFE VECTOR ENDED // RIVAL AGGRESSION UNLOCKED', 1.6);
+    if (simActive) {
+      const previousGrace = this.aggressionGraceRemaining;
+      this.aggressionGraceRemaining = Math.max(0, this.aggressionGraceRemaining - dt);
+      if (previousGrace > 0 && this.aggressionGraceRemaining === 0) {
+        this.world.announce('SAFE VECTOR ENDED // RIVAL AGGRESSION UNLOCKED', 1.6);
+      }
     }
     const player = this.riders[0];
 
@@ -1976,7 +2098,13 @@ export class BikeMode {
     this.braking = braking && this.emergencyStopTimer <= 0;
     if (boosting) player.energy = Math.max(0, player.energy - dt * 27);
     else player.energy = Math.min(100, player.energy + dt * 13);
-    player.speed = this.emergencyStopTimer > 0 ? 0 : boosting ? 11.2 : braking ? 4.9 : 7.7;
+    player.speed = this.emergencyStopTimer > 0
+      ? 0
+      : boosting
+        ? this.tierSpeed.boost
+        : braking
+          ? this.tierSpeed.brake
+          : this.tierSpeed.cruise;
 
     if (this.speedLines) {
       const attribute = this.speedLines.geometry.attributes.position;
@@ -2000,22 +2128,24 @@ export class BikeMode {
       );
     }
 
-    if (player.respawnTimer > 0) {
+    if (simActive && player.respawnTimer > 0) {
       player.respawnTimer -= dt;
       if (player.respawnTimer <= 0 && this.world.phase === 'running') this.respawnPlayer(player);
     }
 
     for (const rider of this.riders) {
       if (!rider.alive) continue;
-      if (rider.analog) {
-        this.advancePlayerAnalog(rider, dt);
-      } else {
-        rider.progress += dt * rider.speed;
-        let safety = 0;
-        while (rider.progress >= 1 && rider.alive && safety < 4) {
-          rider.progress -= 1;
-          this.stepRider(rider);
-          safety += 1;
+      if (simActive) {
+        if (rider.analog) {
+          this.advancePlayerAnalog(rider, dt);
+        } else {
+          rider.progress += dt * rider.speed;
+          let safety = 0;
+          while (rider.progress >= 1 && rider.alive && safety < 4) {
+            rider.progress -= 1;
+            this.stepRider(rider);
+            safety += 1;
+          }
         }
       }
       if (rider.alive) this.updateRiderVisual(rider, dt);
@@ -2042,19 +2172,24 @@ export class BikeMode {
       this.arenaPulse.supports.opacity = 0.33 + Math.sin(this.elapsed * 1.8 + 3.1) * 0.07;
       this.arenaPulse.wall.emissiveIntensity = 0.4 + slow * 0.08;
     }
-    this.score += dt * (boosting ? 28 : 10);
+    if (simActive) this.score += dt * (boosting ? 28 : 10);
     const activeEnemies = this.riders.slice(1).filter((rider) => rider.alive).length;
     const pulseState = this.pulseCooldown <= 0 ? 'READY' : `${this.pulseCooldown.toFixed(1)}s`;
-    const aggressionState = this.aggressionGraceRemaining > 0
-      ? `SAFE VECTOR ${this.aggressionGraceRemaining.toFixed(1)}s`
-      : `LIGHTLINE ${player.trailOn ? 'LIVE' : 'OFF'}`;
+    const wins = '◆'.repeat(this.pWins) + '◇'.repeat(Math.max(0, 2 - this.pWins));
+    const aggressionState = this.cycleState === 'intro'
+      ? `LAUNCH ${Math.max(0, this.stateTimer).toFixed(1)}s`
+      : this.cycleState === 'roundOver'
+        ? (this.pWins > this.eWins ? 'ROUND WON' : 'ROUND LOST')
+        : this.aggressionGraceRemaining > 0
+          ? `SAFE VECTOR ${this.aggressionGraceRemaining.toFixed(1)}s`
+          : `LIGHTLINE ${player.trailOn ? 'LIVE' : 'OFF'}`;
     this.world.updateHUD({
-      mode: 'LIGHTLINE PURSUIT',
+      mode: `LIGHTFIELD · TIER ${this.tier + 1}`,
       score: Math.round(this.score),
       health: player.health,
       resource: player.energy,
       resourceLabel: `FLUX ${Math.round(player.energy)}% · STOPS ${this.emergencyStopsRemaining} · PULSE ${pulseState}`,
-      objective: `${activeEnemies} RUNNERS ACTIVE · ${aggressionState}`,
+      objective: `ROUND ${this.round}/3 · ${wins} · ${activeEnemies} RUNNERS · ${aggressionState}`,
       combo: this.emergencyStopTimer > 0 ? 'EMERGENCY HOLD' : this.kills ? `${this.kills} ERASED` : '',
       speed: `${Math.round(player.speed * this.cellSize * 14)} KPH${this.emergencyStopTimer > 0 ? ' · STOP' : ''}`,
     });
@@ -2132,6 +2267,14 @@ export class BikeMode {
       elapsed: +this.elapsed.toFixed(1),
       arenaBounds: this.bounds,
       arenaSizeMeters: +(this.bounds * this.cellSize * 2).toFixed(1),
+      campaign: {
+        tier: this.tier,
+        round: this.round,
+        state: this.cycleState,
+        pWins: this.pWins,
+        eWins: this.eWins,
+        cruiseSpeed: this.tierSpeed.cruise,
+      },
       aggressionGrace: {
         duration: this.aggressionGraceDuration,
         remaining: +this.aggressionGraceRemaining.toFixed(2),

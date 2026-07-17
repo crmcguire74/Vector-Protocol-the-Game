@@ -20,12 +20,38 @@ import {
   updateShockwaves,
 } from './Visuals.js';
 import { createAnimatedSentinel, updateSentinelRig } from './SentinelAsset.js';
+import { Store, RNG, clamp } from './store.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const DISC_FORWARD = new THREE.Vector3(0, 0, 1);
 const DISC_RADIUS = 0.36;
 const CUSTOM_ROOM_STORAGE_KEY = 'vector-protocol.custom-room';
 const ROOM_TRACE_GRIP_HOLD_SECONDS = 2.2;
+
+// ─── Campaign: an authored ladder of three programs, best-of-3 per program,
+// arenas that shrink and reconfigure each round. Ported behaviour from the
+// preferred build (design/thresholds.md v5/v6), retuned for the first-person
+// digital-cathedral scale of this renderer.
+const PROGRAMS = ['BIT-3', 'VANTA', 'SENTINEL-9'];
+const ARENAS = ['PROVING RING', 'SHARD SPIRE', 'CORE VAULT'];
+const PIPS = 3; // integrity per combatant per round
+const RING_R = [4.4, 3.8, 3.2]; // PROVING RING facing-disc radius by round (gap stays uncrossable)
+const PAD_MUL = [1, 0.86, 0.73]; // per-round pad shrink for multi-pad arenas
+const DISC_SPEED = 18; // player throw speed (frisbee)
+const ENEMY_DISC_SPEED = [12.5, 14.5, 16.5]; // by program tier
+const RETURN_T = 2.4; // seconds before a player disc auto-returns
+const PLAYER_MAX_BANKS = 3;
+const ENEMY_MAX_BANKS = 3;
+// Per-program AI archetype. One state machine, distinct readable behaviour.
+const AI = {
+  windup: [0.9, 0.62, 0.5], // telegraph length — BIT-3 is slow & honest
+  feint: [0, 0.35, 0.5], // chance to abort a windup as a feint
+  guard: [0.1, 0.36, 0.6], // chance to reactively guard/deflect
+  dodge: [0.2, 0.4, 0.55], // chance to side/jump dodge an incoming disc
+  aimErr: [0.5, 0.34, 0.22], // aim spread (radians-ish) — tightens by tier
+  bankP: [0.14, 0.33, 0.55], // chance to bank a throw off a wall
+  cadence: [3.05, 2.55, 2.15], // base seconds between throw attempts
+};
 
 export class ArenaMode {
   constructor(world, { roomPreset = 'portal' } = {}) {
@@ -37,6 +63,7 @@ export class ArenaMode {
     this.world.scene.add(this.root);
     this.random = seededRandom(2471);
     this.platforms = [];
+    this.obstacles = [];
     this.enemies = [];
     this.projectiles = [];
     this.telegraphs = [];
@@ -44,9 +71,19 @@ export class ArenaMode {
     this.shockwaves = [];
     this.arPanels = [];
     this.breaches = [];
+    this.floorShards = [];
     this.fractureLevel = 0;
-    this.wave = 1;
-    this.waveDelay = 0;
+
+    // Campaign / match / round state machine.
+    this.tier = clamp(Store.get('discWins') || 0, 0, PROGRAMS.length - 1); // program index, resumes from progress
+    this.round = 1; // 1..3 within the current best-of-3
+    this.pWins = 0;
+    this.eWins = 0;
+    this.playerPips = PIPS;
+    this.matchState = 'intro'; // intro → fight → roundOver → reboot → advance/done
+    this.stateTimer = 0;
+    this.rng = new RNG(0x51ede7 ^ (this.tier * 2654435761)); // per-match deterministic decisions
+
     this.score = 0;
     this.combo = 0;
     this.comboTimer = 0;
@@ -89,10 +126,9 @@ export class ArenaMode {
       this.handDisc.rotation.set(-0.12, -0.2, 0.16);
       this.world.camera.add(this.handDisc);
     }
-    this.spawnWave(1);
     this.world.setPlayerPosition(this.player.position);
     this.world.setYaw(0);
-    this.world.announce('SYNC ONE // BREAK THE WARDENS', 2.5);
+    this.startMatch();
   }
 
   buildWorld() {
@@ -154,28 +190,16 @@ export class ArenaMode {
       }
     } else {
       this.arenaBounds = {
-        minX: -17,
-        maxX: 17,
-        minZ: -26,
-        maxZ: 17,
+        minX: -14.5,
+        maxX: 14.5,
+        minZ: -20,
+        maxZ: 16,
         floorY: -7.72,
         ceilingY: 10.5,
       };
-      const layout = [
-        [0, 0, 10, 4.9],
-        [0, 1, 0.2, 4.2],
-        [-8.6, 2, -8.7, 4.25],
-        [8.6, 2, -8.7, 4.25],
-        [0, 3.2, -18, 5.4],
-      ];
-      layout.forEach(([x, y, z, radius], index) => {
-        const accent = index === 0 ? COLORS.cyan : index % 2 ? COLORS.violet : COLORS.coral;
-        const mesh = createPlatform(radius, y, accent, index * 29);
-        mesh.position.x = x;
-        mesh.position.z = z;
-        this.root.add(mesh);
-        this.platforms.push({ x, y, z, radius, mesh });
-      });
+      // Platforms are built per round by buildLayout(); the void death plane
+      // sits well below them so falling between pads costs an integrity pip.
+      this.voidDeathY = -3.2;
 
       const voidGrid = new THREE.GridHelper(96, 64, COLORS.violet, 0x10233b);
       voidGrid.position.y = -8;
@@ -604,97 +628,279 @@ export class ArenaMode {
     this.arShell = shell;
   }
 
-  spawnWave(wave) {
-    const ar = this.isARPresentation;
-    const room = this.arRoom;
-    const positions = ar && room
-      ? [
-          [room.centerX, room.floorY, room.minZ + Math.min(1.2, room.depth * 0.22)],
-          [room.centerX - room.width * 0.27, room.floorY, room.minZ + room.depth * 0.34],
-          [room.centerX + room.width * 0.27, room.floorY, room.minZ + room.depth * 0.34],
-          [room.centerX, room.floorY, room.minZ + Math.min(0.95, room.depth * 0.2)],
-        ]
-      : [
-          [0, 1, 0.2],
-          [-8.6, 2, -8.7],
-          [8.6, 2, -8.7],
-          [0, 3.2, -18],
-        ];
-    const roles = ['STRIKER', 'WARDEN', 'LEAPER', 'PRIME'];
-    const count = Math.min(wave + 1, wave === 3 ? 1 : 3);
-    for (let i = 0; i < count; i += 1) {
-      const index = wave === 3 ? 3 : (wave - 1 + i) % 3;
-      const [x, y, z] = positions[index];
-      const spawn = new THREE.Vector3(x, y, z);
-      if (ar && !this.roomContainsPoint(spawn.x, spawn.z, 0.58)) {
-        const safe = this.clampPointToRoom(spawn.x, spawn.z, 0.62);
-        spawn.set(safe.x, room.floorY, safe.y);
-      }
-      this.spawnEnemy(spawn, roles[index], index === 3 ? COLORS.amber : COLORS.coral);
+  // ─── Campaign / match / round machine ─────────────────────────────────
+
+  startMatch() {
+    this.pWins = 0;
+    this.eWins = 0;
+    this.round = 1;
+    this.startRound();
+  }
+
+  // Per-program, per-round arena geometry. PROVING RING is one shrinking pad;
+  // SHARD SPIRE breaks it into three pads with floating shards; CORE VAULT is a
+  // five-pad cross around a central pylon. Gaps between pads are real falls.
+  layoutFor(tier, round) {
+    const mul = PAD_MUL[round - 1];
+    // Discs of Tron rule: the player and the program stand on SEPARATE platforms
+    // across a void gap wide enough that neither can cross to the other. The duel
+    // is fought by throwing and banking discs across the gap.
+    if (tier === 0) {
+      // PROVING RING: two facing discs that shrink each round.
+      const r = RING_R[round - 1];
+      const playerPad = { x: 0, y: 0, z: 6, radius: r, accent: COLORS.cyan };
+      const enemyPad = { x: 0, y: 0, z: -9, radius: r, accent: COLORS.orange };
+      return {
+        pads: [playerPad, enemyPad],
+        obstacles: [],
+        playerSpawn: { x: 0, y: 0, z: 6 },
+        enemySpawn: { x: 0, y: 0, z: -9 },
+        enemyPad,
+      };
+    }
+    if (tier === 1) {
+      // SHARD SPIRE: a player cluster (main + two side pads for lateral dodging)
+      // faces a single raised program pad, with floating shards in the gap to bank.
+      const r = 2.8 * mul;
+      const enemyPad = { x: 0, y: 0.9, z: -9.5, radius: r, accent: COLORS.orange };
+      return {
+        pads: [
+          { x: 0, y: 0, z: 6.5, radius: r, accent: COLORS.cyan },
+          { x: -5.6, y: 0.4, z: 6.5, radius: r * 0.78, accent: COLORS.violet },
+          { x: 5.6, y: 0.4, z: 6.5, radius: r * 0.78, accent: COLORS.violet },
+          enemyPad,
+        ],
+        obstacles: [
+          { type: 'shard', x: -3, y: 2.4, z: -1.5, radius: 0.85 },
+          { type: 'shard', x: 3, y: 3.0, z: -1.5, radius: 0.85 },
+        ],
+        playerSpawn: { x: 0, y: 0, z: 6.5 },
+        enemySpawn: { x: 0, y: 0.9, z: -9.5 },
+        enemyPad,
+      };
+    }
+    // CORE VAULT: player cluster with two elevated flank pads faces the program's
+    // raised pad across a gap guarded by a central pylon to bank around.
+    const r = 2.6 * mul;
+    const enemyPad = { x: 0, y: 1.0, z: -9.5, radius: r, accent: COLORS.orange };
+    return {
+      pads: [
+        { x: 0, y: 0, z: 6.5, radius: r, accent: COLORS.cyan },
+        { x: -6.6, y: 0.6, z: 4, radius: r * 0.8, accent: COLORS.violet },
+        { x: 6.6, y: 0.6, z: 4, radius: r * 0.8, accent: COLORS.violet },
+        enemyPad,
+      ],
+      obstacles: [{ type: 'pylon', x: 0, y: 0, z: -1.5, radius: 0.7, height: 4.6 }],
+      playerSpawn: { x: 0, y: 0, z: 6.5 },
+      enemySpawn: { x: 0, y: 1.0, z: -9.5 },
+      enemyPad,
+    };
+  }
+
+  clearLayout() {
+    for (const platform of this.platforms) if (platform.mesh) disposeObject(platform.mesh);
+    this.platforms.length = 0;
+    for (const obstacle of this.obstacles) if (obstacle.mesh) disposeObject(obstacle.mesh);
+    this.obstacles.length = 0;
+  }
+
+  buildLayout(tier, round) {
+    if (this.isARPresentation) return null; // AR uses the room footprint as the floor
+    this.clearLayout();
+    const layout = this.layoutFor(tier, round);
+    layout.pads.forEach((pad, index) => {
+      const mesh = createPlatform(pad.radius, pad.y, pad.accent, index * 29);
+      mesh.position.x = pad.x;
+      mesh.position.z = pad.z;
+      this.root.add(mesh);
+      this.platforms.push({ x: pad.x, y: pad.y, z: pad.z, radius: pad.radius, mesh });
+    });
+    for (const spec of layout.obstacles) {
+      const mesh = spec.type === 'pylon'
+        ? new THREE.Mesh(
+            new THREE.CylinderGeometry(spec.radius, spec.radius * 1.15, spec.height, 12),
+            new THREE.MeshStandardMaterial({ color: 0x06111c, emissive: COLORS.cyan, emissiveIntensity: 0.4, metalness: 0.85, roughness: 0.24 }),
+          )
+        : new THREE.Mesh(
+            new THREE.OctahedronGeometry(spec.radius, 0),
+            new THREE.MeshStandardMaterial({ color: 0x07101b, emissive: COLORS.amber, emissiveIntensity: 0.5, metalness: 0.8, roughness: 0.26 }),
+          );
+      mesh.position.set(spec.x, spec.y + (spec.type === 'pylon' ? spec.height * 0.5 : 0), spec.z);
+      this.root.add(mesh);
+      this.obstacles.push({ ...spec, mesh });
+    }
+    return layout;
+  }
+
+  startRound() {
+    // Clear any live discs / telegraphs from the previous round.
+    for (let i = this.projectiles.length - 1; i >= 0; i -= 1) this.removeProjectile(i);
+    for (const telegraph of this.telegraphs) disposeObject(telegraph.line);
+    this.telegraphs.length = 0;
+    this.enemies.forEach((enemy) => this.removeEnemy(enemy));
+    this.enemies.length = 0;
+
+    this.playerPips = PIPS;
+    this.player.health = 100;
+    this.player.discs = 2;
+    this.player.velocity.set(0, 0, 0);
+    this.player.grounded = true;
+    this.matchState = 'intro';
+    this.stateTimer = 2.4;
+
+    const layout = this.buildLayout(this.tier, this.round);
+    if (layout && !this.isARPresentation) {
+      this.player.position.set(layout.playerSpawn.x, layout.playerSpawn.y, layout.playerSpawn.z);
+      this.playerSpawnPad = { ...layout.playerSpawn };
+      this.spawnProgram(this.tier, new THREE.Vector3(layout.enemySpawn.x, layout.enemySpawn.y, layout.enemySpawn.z), layout.enemyPad);
+    } else {
+      // AR: place the program across the mapped room (roams via pickARRoamTarget).
+      const room = this.arRoom;
+      const spawn = room
+        ? this.clampPointToRoom(room.centerX, room.minZ + room.depth * 0.28, 0.62)
+        : new THREE.Vector2(0, -2);
+      const y = room ? room.floorY : 0;
+      this.spawnProgram(this.tier, new THREE.Vector3(spawn.x, y, spawn.y), null);
+    }
+    this.world.setPlayerPosition(this.player.position);
+
+    const program = PROGRAMS[this.tier];
+    const arena = ARENAS[this.tier];
+    this.world.announce(`USER VS ${program}  ·  ${arena}  ·  ROUND ${this.round}/3`, 2.4);
+  }
+
+  roundOver(playerWon) {
+    if (this.matchState === 'roundOver' || this.matchState === 'done') return;
+    this.matchState = 'roundOver';
+    this.stateTimer = playerWon ? 2.0 : 3.1;
+    if (playerWon) {
+      this.pWins += 1;
+      const alive = this.enemies.find((enemy) => !enemy.dead);
+      if (alive) this.damageEnemy(alive, alive.maxPips, alive.mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0)), true);
+      this.score += 750;
+      this.world.announce(`ROUND WON  ·  ${this.pWins}–${this.eWins}`, 2.0);
+    } else {
+      this.eWins += 1;
+      this.world.announce(`ROUND LOST  ·  ${this.pWins}–${this.eWins}`, 2.4);
+      this.world.pulseVignette();
     }
   }
 
-  spawnEnemy(position, role, color) {
+  advanceCampaign() {
+    if (this.pWins >= 2) {
+      // Program defeated → persist progress and move up the ladder.
+      Store.set('discWins', Math.max(Store.get('discWins') || 0, this.tier + 1));
+      if (this.tier >= PROGRAMS.length - 1) {
+        this.matchState = 'done';
+        this.world.endGame(true, {
+          title: 'MATCH COMPLETE // THE GRID RELEASES YOU',
+          detail: `All programs decompiled · Signal ${this.score.toLocaleString()}`,
+        });
+        return;
+      }
+      this.tier += 1;
+      this.rng = new RNG(0x51ede7 ^ (this.tier * 2654435761));
+      this.pWins = 0;
+      this.eWins = 0;
+      this.round = 1;
+      this.startRound();
+      return;
+    }
+    if (this.eWins >= 2) {
+      this.matchState = 'done';
+      this.world.endGame(false, {
+        title: 'SIGNAL SEVERED',
+        detail: `${PROGRAMS[this.tier]} held the ring · Signal ${this.score.toLocaleString()}`,
+      });
+      return;
+    }
+    this.round += 1;
+    this.startRound();
+  }
+
+  removeEnemy(enemy) {
+    if (enemy.rig) {
+      enemy.rig.mixer.stopAllAction();
+      enemy.rig.mixer.uncacheRoot(enemy.rig.model);
+    }
+    if (enemy.mesh) disposeObject(enemy.mesh);
+  }
+
+  spawnProgram(tier, position, pad) {
+    const color = tier === 2 ? COLORS.orange : tier === 1 ? COLORS.coral : COLORS.amber;
+    const role = tier === 2 ? 'PRIME' : 'PROGRAM';
     const mesh = createHumanoid(color, role);
     mesh.position.copy(position);
-    mesh.scale.setScalar(role === 'PRIME' ? 1.24 : 1);
+    const scale = tier === 2 ? 1.14 : tier === 1 ? 1.06 : 1;
+    mesh.scale.setScalar(scale);
     this.root.add(mesh);
 
-    const healthRoot = new THREE.Group();
-    healthRoot.position.set(0, role === 'PRIME' ? 2.85 : 2.7, 0);
-    const healthBack = new THREE.Mesh(
+    const pipRoot = new THREE.Group();
+    pipRoot.position.set(0, tier === 2 ? 2.85 : 2.7, 0);
+    const pipBack = new THREE.Mesh(
       new THREE.PlaneGeometry(0.9, 0.055),
-      new THREE.MeshBasicMaterial({ color: 0x14070b, transparent: true, opacity: 0.8, depthTest: false }),
+      new THREE.MeshBasicMaterial({ color: 0x2a1403, transparent: true, opacity: 0.8, depthTest: false }),
     );
-    const healthFill = new THREE.Mesh(
+    const pipFill = new THREE.Mesh(
       new THREE.PlaneGeometry(0.86, 0.035),
       new THREE.MeshBasicMaterial({ color, depthTest: false, toneMapped: false }),
     );
-    healthFill.position.z = 0.002;
-    healthRoot.add(healthBack, healthFill);
-    mesh.add(healthRoot);
-    let barrier = null;
-    if (role === 'WARDEN') {
-      barrier = new THREE.Mesh(
-        new THREE.RingGeometry(0.52, 0.98, 8),
-        new THREE.MeshBasicMaterial({
-          color,
-          transparent: true,
-          opacity: 0.48,
-          side: THREE.DoubleSide,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-        }),
-      );
-      barrier.position.set(0, 1.28, 0.76);
-      mesh.add(barrier);
-    }
-    const health = role === 'PRIME' ? 220 : role === 'WARDEN' ? 130 : 100;
+    pipFill.position.z = 0.002;
+    pipRoot.add(pipBack, pipFill);
+    mesh.add(pipRoot);
+
+    // Transient guard buckler — raised only during a reactive guard.
+    const guardMesh = new THREE.Mesh(
+      new THREE.RingGeometry(0.5, 1.0, 10),
+      new THREE.MeshBasicMaterial({
+        color: COLORS.ice,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    guardMesh.position.set(0, 1.3, 0.72);
+    guardMesh.visible = false;
+    mesh.add(guardMesh);
+
     const enemy = {
       id: ++this.enemySerial,
       mesh,
       position: mesh.position,
       origin: position.clone(),
-      health,
-      maxHealth: health,
-      role,
+      tier,
+      program: PROGRAMS[tier],
+      role, // retained for rig tinting + facing behaviour
       color,
-      cooldown: 1.5 + this.random() * 1.4,
-      phase: this.random() * Math.PI * 2,
-      healthRoot,
-      healthFill,
-      barrier,
+      pips: PIPS,
+      maxPips: PIPS,
+      health: PIPS,
+      maxHealth: PIPS,
+      cooldown: 1.5 + this.rng.range(0, 1.2),
+      phase: this.rng.range(0, Math.PI * 2),
+      healthRoot: pipRoot,
+      healthFill: pipFill,
+      guardMesh,
+      barrier: null,
       hitFlash: 0,
       navTarget: position.clone(),
-      relocateTimer: 0.35 + this.random() * 0.6,
-      moveSpeed: role === 'LEAPER' ? 4.35 : role === 'PRIME' ? 3.4 : 3.72,
+      relocateTimer: 0.35 + this.rng.range(0, 0.6),
+      moveSpeed: tier === 2 ? 3.95 : tier === 1 ? 3.7 : 3.5,
       running: false,
       rig: null,
       dead: false,
       openingCooldown: 0,
+      pad: pad || null,
+      roamRadius: pad ? pad.radius - 1.0 : 1.4,
+      guardActive: 0,
+      dodgeCooldown: 0,
+      feinting: false,
     };
     this.enemies.push(enemy);
     this.upgradeEnemyVisual(enemy);
+    return enemy;
   }
 
   async upgradeEnemyVisual(enemy) {
@@ -710,14 +916,14 @@ export class ArenaMode {
       const quaternion = fallback.quaternion.clone();
       const visible = fallback.visible;
       enemy.healthRoot.removeFromParent();
-      enemy.barrier?.removeFromParent();
+      enemy.guardMesh?.removeFromParent();
       rig.root.position.copy(position);
       rig.root.quaternion.copy(quaternion);
       rig.root.visible = visible;
       if (enemy.role === 'PRIME') rig.root.scale.setScalar(1.12);
       enemy.healthRoot.position.set(0, enemy.role === 'PRIME' ? 2.82 : 2.58, 0);
       rig.root.add(enemy.healthRoot);
-      if (enemy.barrier) rig.root.add(enemy.barrier);
+      if (enemy.guardMesh) rig.root.add(enemy.guardMesh);
       this.root.add(rig.root);
       disposeObject(fallback);
       enemy.mesh = rig.root;
@@ -871,7 +1077,7 @@ export class ArenaMode {
       this.charge = THREE.MathUtils.clamp((speed - 13) / 17, 0, 1);
     } else {
       origin = localRay.origin.clone().addScaledVector(localRay.direction, 0.5);
-      speed = 14 + Math.min(1, this.charge) * 8;
+      speed = DISC_SPEED - 3 + Math.min(1, this.charge) * 7;
     }
     const mesh = createDisc(COLORS.cyan, false);
     mesh.position.copy(origin);
@@ -895,7 +1101,7 @@ export class ArenaMode {
       trail,
       color: COLORS.cyan,
       banks: 0,
-      maxBanks: 5,
+      maxBanks: PLAYER_MAX_BANKS,
       bankCooldown: 0,
       wobble: 0,
       flightSpin: 28 + this.random() * 8,
@@ -976,6 +1182,7 @@ export class ArenaMode {
     };
     this.breaches.push(breach);
     this.fractureLevel += 1;
+    if (type === 'floor') this.spawnFloorShatter(position);
     this.world.announce(type === 'floor' ? 'FLOOR BREACH // MIND THE VOID' : 'ROOM BREACH // SPACE UNSEALED', 1.05);
     return breach;
   }
@@ -1013,7 +1220,7 @@ export class ArenaMode {
     ) {
       this.playerOpeningLatched = true;
       this.openingCooldown = 1.65;
-      this.damagePlayer(34);
+      this.damagePlayer(1);
       this.world.announce(
         opening.type === 'floor' ? 'VOID FALL // ONE LIFE LOST' : 'BREACH ENTRY // ONE LIFE LOST',
         1.25,
@@ -1029,7 +1236,7 @@ export class ArenaMode {
     if (!opening) return;
     enemy.openingCooldown = 1.8;
     const impact = enemy.mesh.position.clone().add(new THREE.Vector3(0, 0.45, 0));
-    this.damageEnemy(enemy, Math.ceil(enemy.maxHealth * 0.5), impact);
+    this.damageEnemy(enemy, 1, impact);
     if (enemy.dead) return;
     const safe = this.pickARRoamTarget(enemy, true);
     enemy.mesh.position.copy(safe);
@@ -1052,8 +1259,9 @@ export class ArenaMode {
     const origin = this.getEnemyThrowOrigin(enemy);
     if (enemy.rig) enemy.rig.handDisc.visible = false;
     const aim = target.clone();
-    if (this.arenaBounds && this.random() < Math.min(0.48, 0.18 + this.wave * 0.08)) {
-      const wallX = this.random() < 0.5 ? this.arenaBounds.minX : this.arenaBounds.maxX;
+    // Higher-tier programs bank throws off the walls to beat a static guard.
+    if (this.arenaBounds && this.rng.chance(AI.bankP[enemy.tier])) {
+      const wallX = this.rng.chance(0.5) ? this.arenaBounds.minX : this.arenaBounds.maxX;
       aim.x = wallX * 2 - target.x;
     }
     const direction = aim.sub(origin).normalize();
@@ -1069,30 +1277,34 @@ export class ArenaMode {
       mesh,
       position: mesh.position,
       previous: mesh.position.clone(),
-      velocity: direction.multiplyScalar(8.5 + this.wave * 0.8),
+      velocity: direction.multiplyScalar(ENEMY_DISC_SPEED[enemy.tier]),
       age: 0,
       returning: false,
-      damage: enemy.role === 'PRIME' ? 28 : 18,
+      damage: 1,
       hitIds: new Set(),
       returnToAmmo: false,
       trail,
       color: enemy.color,
       banks: 0,
-      maxBanks: 4,
+      maxBanks: ENEMY_MAX_BANKS,
       bankCooldown: 0,
       wobble: 0,
       flightSpin: 25 + this.random() * 7,
     });
   }
 
-  startTelegraph(enemy, targetOverride = null) {
+  startTelegraph(enemy, targetOverride = null, feint = false) {
     const start = this.getEnemyThrowOrigin(enemy);
-    const target = targetOverride || this.getPlayerCenter();
+    const target = (targetOverride || this.getPlayerCenter()).clone();
+    // Aim spread tightens up the ladder; BIT-3 is loose, SENTINEL-9 is precise.
+    const err = AI.aimErr[enemy.tier];
+    target.x += this.rng.spread(err);
+    target.z += this.rng.spread(err * 0.6);
     const geometry = new THREE.BufferGeometry().setFromPoints([start, target]);
     const line = new THREE.Line(
       geometry,
       new THREE.LineBasicMaterial({
-        color: enemy.color,
+        color: feint ? COLORS.ice : enemy.color,
         transparent: true,
         opacity: 0.25,
         blending: THREE.AdditiveBlending,
@@ -1100,58 +1312,50 @@ export class ArenaMode {
       }),
     );
     this.root.add(line);
-    const duration = enemy.role === 'PRIME' ? 0.52 : 0.72;
-    this.telegraphs.push({ enemy, target, line, life: duration, maxLife: duration });
+    const duration = AI.windup[enemy.tier] * this.rng.range(0.85, 1.2);
+    this.telegraphs.push({ enemy, target, line, life: duration, maxLife: duration, feint });
+    enemy.feinting = feint;
   }
 
-  damageEnemy(enemy, amount, impact) {
+  // Integrity is measured in pips, not a health bar: three hits ends a round.
+  damageEnemy(enemy, pipCost = 1, impact, finisher = false) {
     if (enemy.dead) return;
-    enemy.health -= amount;
-    enemy.hitFlash = 0.28;
-    enemy.healthFill.scale.x = Math.max(0.001, enemy.health / enemy.maxHealth);
-    enemy.healthFill.position.x = -0.43 * (1 - enemy.health / enemy.maxHealth);
-    this.bursts.push(createParticleBurst(this.root, impact, enemy.color, 12, 0.09));
+    enemy.pips = Math.max(0, enemy.pips - pipCost);
+    enemy.health = enemy.pips;
+    enemy.hitFlash = 0.3;
+    enemy.healthFill.scale.x = Math.max(0.001, enemy.pips / enemy.maxPips);
+    enemy.healthFill.position.x = -0.43 * (1 - enemy.pips / enemy.maxPips);
+    this.bursts.push(createParticleBurst(this.root, impact, enemy.color, finisher ? 40 : 14, finisher ? 0.16 : 0.09));
     this.shockwaves.push(createShockwave(this.root, impact, enemy.color));
-    this.combo += 1;
-    this.comboTimer = 3.2;
-    this.score += Math.round(amount * 3 * Math.max(1, this.combo * 0.2));
     if (enemy.mesh.userData.torso) enemy.mesh.userData.torso.material.emissiveIntensity = 1.8;
-    if (enemy.health <= 0) {
+    if (!finisher) {
+      this.combo += 1;
+      this.comboTimer = 3.2;
+      this.score += 120 * Math.max(1, Math.round(this.combo * 0.4));
+    }
+    if (enemy.pips <= 0) {
       enemy.dead = true;
-      this.score += enemy.role === 'PRIME' ? 2000 : 500;
-      this.combo += 2;
-      const center = enemy.mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0));
-      this.bursts.push(createParticleBurst(this.root, center, enemy.color, enemy.role === 'PRIME' ? 46 : 28, 0.16));
       enemy.mesh.visible = false;
-      this.world.announce(`${enemy.role} DEREZZED // +${enemy.role === 'PRIME' ? 2000 : 500}`, 1.35);
-      if (this.enemies.every((item) => item.dead)) {
-        if (this.wave >= 3) {
-          this.waveDelay = -1;
-          this.world.endGame(true, {
-            title: 'THE SHATTERGRID YIELDS',
-            detail: `Signal ${this.score.toLocaleString()} · ${this.combo} chain peak`,
-          });
-        } else {
-          this.waveDelay = 2.1;
-        }
+      const center = enemy.mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+      this.bursts.push(createParticleBurst(this.root, center, enemy.color, 46, 0.16));
+      if (!finisher) {
+        this.score += 500;
+        this.world.announce(`${enemy.program} DECOMPILED`, 1.2);
+        this.roundOver(true);
       }
     }
   }
 
-  damagePlayer(amount) {
-    if (this.player.invulnerable > 0) return;
-    this.player.health = Math.max(0, this.player.health - amount);
-    this.player.invulnerable = 0.45;
+  damagePlayer(pipCost = 1) {
+    if (this.player.invulnerable > 0 || this.matchState !== 'fight') return;
+    this.playerPips = Math.max(0, this.playerPips - pipCost);
+    this.player.health = Math.round((this.playerPips / PIPS) * 100);
+    this.player.invulnerable = 0.6;
     this.combo = 0;
     this.comboTimer = 0;
-    this.world.damageFeedback(amount);
+    this.world.damageFeedback(40);
     this.shockwaves.push(createShockwave(this.root, this.getPlayerCenter(), COLORS.coral));
-    if (this.player.health <= 0) {
-      this.world.endGame(false, {
-        title: 'SIGNAL SEVERED',
-        detail: `Signal ${this.score.toLocaleString()} · reached sync ${this.wave}`,
-      });
-    }
+    if (this.playerPips <= 0) this.roundOver(false);
   }
 
   removeProjectile(index) {
@@ -1252,11 +1456,11 @@ export class ArenaMode {
       }
     }
 
-    const fallLimit = this.isARPresentation ? -2.8 : -10;
+    const fallLimit = this.isARPresentation ? -2.8 : (this.voidDeathY ?? -3.2);
     if (player.position.y < fallLimit) {
       const openingAlreadyCharged =
         this.isARPresentation && this.playerOpeningLatched && this.openingCooldown > 0;
-      if (!openingAlreadyCharged) this.damagePlayer(this.isARPresentation ? 34 : 16);
+      if (!openingAlreadyCharged) this.damagePlayer(1);
       if (this.isARPresentation && this.arRoom) {
         player.position.set(
           this.arRoom.centerX,
@@ -1266,14 +1470,12 @@ export class ArenaMode {
         this.playerOpeningLatched = true;
         this.openingCooldown = 1.2;
       } else {
-        player.position.set(0, 0, 11.5);
+        const pad = this.playerSpawnPad || { x: 0, y: 0, z: 6 };
+        player.position.set(pad.x, pad.y, pad.z);
       }
       player.velocity.set(0, 0, 0);
       player.grounded = true;
-      this.world.announce(
-        this.isARPresentation ? 'VOID RETURN // ONE LIFE LOST' : 'VOID RETURN // SIGNAL -16',
-        1.2,
-      );
+      this.world.announce('VOID FALL // ONE LIFE LOST', 1.2);
     }
     this.world.setPlayerPosition(player.position);
     const planarSpeed = Math.hypot(player.velocity.x, player.velocity.z);
@@ -1313,7 +1515,15 @@ export class ArenaMode {
     for (const enemy of this.enemies) {
       if (enemy.dead) continue;
       enemy.openingCooldown = Math.max(0, enemy.openingCooldown - dt);
-      enemy.phase += dt * (enemy.role === 'LEAPER' ? 2.2 : 1.25);
+      enemy.phase += dt * 1.25;
+      enemy.guardActive = Math.max(0, enemy.guardActive - dt);
+      enemy.dodgeCooldown = Math.max(0, enemy.dodgeCooldown - dt);
+      this.reactToIncoming(enemy);
+      if (enemy.guardMesh) {
+        enemy.guardMesh.visible = enemy.guardActive > 0;
+        enemy.guardMesh.material.opacity = Math.min(0.62, enemy.guardActive * 1.4);
+        enemy.guardMesh.rotation.z += dt * 4;
+      }
       const activeTelegraph = this.telegraphs.find((telegraph) => telegraph.enemy === enemy);
       const attacking = Boolean(activeTelegraph);
       enemy.relocateTimer -= dt;
@@ -1321,12 +1531,15 @@ export class ArenaMode {
         if (this.isARPresentation && this.arRoom) {
           enemy.navTarget.copy(this.pickARRoamTarget(enemy));
         } else {
+          const pad = enemy.pad;
           const angle = this.random() * Math.PI * 2;
-          const radius = (enemy.role === 'PRIME' ? 3.35 : enemy.role === 'LEAPER' ? 3.5 : 3.2) * (0.64 + this.random() * 0.36);
+          const radius = enemy.roamRadius * (0.2 + this.random() * 0.7);
+          const cx = pad ? pad.x : enemy.origin.x;
+          const cz = pad ? pad.z : enemy.origin.z;
           enemy.navTarget.set(
-            enemy.origin.x + Math.cos(angle) * radius,
-            enemy.origin.y,
-            enemy.origin.z + Math.sin(angle) * radius,
+            cx + Math.cos(angle) * radius,
+            pad ? pad.y : enemy.origin.y,
+            cz + Math.sin(angle) * radius,
           );
         }
         enemy.relocateTimer = 1.05 + this.random() * 1.15;
@@ -1350,6 +1563,17 @@ export class ArenaMode {
         enemy.mesh.position.z = safe.y;
         this.handleEnemyOpening(enemy);
         if (enemy.dead) continue;
+      } else if (enemy.pad) {
+        // Keep the program on its pad so it never wanders into the void.
+        const pad = enemy.pad;
+        const dx = enemy.mesh.position.x - pad.x;
+        const dz = enemy.mesh.position.z - pad.z;
+        const dist = Math.hypot(dx, dz);
+        const maxR = pad.radius - 0.6;
+        if (dist > maxR) {
+          enemy.mesh.position.x = pad.x + (dx / dist) * maxR;
+          enemy.mesh.position.z = pad.z + (dz / dist) * maxR;
+        }
       }
       const facingTarget = enemy.running ? enemy.navTarget.clone() : this.getPlayerCenter();
       facingTarget.y = enemy.mesh.position.y;
@@ -1409,14 +1633,55 @@ export class ArenaMode {
       const cameraWorldQuaternion = this.world.camera.getWorldQuaternion(new THREE.Quaternion());
       enemy.healthRoot.quaternion.copy(enemyWorldQuaternion.invert().multiply(cameraWorldQuaternion));
       enemy.cooldown -= dt;
-      if (enemy.cooldown <= 0 && this.world.phase === 'running') {
-        this.startTelegraph(enemy);
-        if (enemy.role === 'PRIME') {
-          const alternateTarget = this.getPlayerCenter().add(new THREE.Vector3(1.2, 0.35, 0));
-          this.startTelegraph(enemy, alternateTarget);
+      const canThrow = enemy.cooldown <= 0 && this.matchState === 'fight' && this.world.phase === 'running' && !attacking;
+      if (canThrow) {
+        const feint = this.rng.chance(AI.feint[enemy.tier]);
+        this.startTelegraph(enemy, null, feint);
+        // SENTINEL-9 chains a second real throw to punish a committed dodge.
+        if (enemy.tier === 2 && !feint && this.rng.chance(0.45)) {
+          const alternateTarget = this.getPlayerCenter().add(new THREE.Vector3(1.4, 0.35, 0));
+          this.startTelegraph(enemy, alternateTarget, false);
         }
-        enemy.cooldown = Math.max(1.35, 3.25 - this.wave * 0.28) + this.random() * 1.8;
+        enemy.cooldown = AI.cadence[enemy.tier] * this.rng.range(0.8, 1.3);
       }
+    }
+  }
+
+  // Reactive read of the closest incoming player disc: dodge or raise a guard,
+  // once per disc. Higher tiers read and counter more often.
+  reactToIncoming(enemy) {
+    if (this.matchState !== 'fight') return;
+    const center = enemy.mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+    let closest = null;
+    let closestDist = Infinity;
+    for (const projectile of this.projectiles) {
+      if (projectile.owner !== 'player' || projectile.returning) continue;
+      const distance = projectile.position.distanceTo(center);
+      if (distance > 6.5) continue;
+      const toEnemy = center.clone().sub(projectile.position);
+      if (projectile.velocity.dot(toEnemy) <= 0) continue; // not closing
+      if (distance < closestDist) {
+        closestDist = distance;
+        closest = projectile;
+      }
+    }
+    if (!closest || enemy.reactedTo === closest.id) return;
+    enemy.reactedTo = closest.id;
+    if (enemy.dodgeCooldown <= 0 && this.rng.chance(AI.dodge[enemy.tier])) {
+      const side = this.rng.chance(0.5) ? 1 : -1;
+      const lateral = new THREE.Vector3(Math.cos(enemy.mesh.rotation.y), 0, -Math.sin(enemy.mesh.rotation.y))
+        .multiplyScalar(side * 1.7);
+      const target = enemy.origin.clone().add(lateral);
+      if (this.isARPresentation && this.arRoom) {
+        const safe = this.clampPointToRoom(target.x, target.z, 0.5);
+        enemy.navTarget.set(safe.x, enemy.origin.y, safe.y);
+      } else {
+        enemy.navTarget.copy(target);
+      }
+      enemy.relocateTimer = 0.6;
+      enemy.dodgeCooldown = 1.5;
+    } else if (this.rng.chance(AI.guard[enemy.tier])) {
+      enemy.guardActive = 0.6;
     }
   }
 
@@ -1430,8 +1695,17 @@ export class ArenaMode {
       positions.setXYZ(1, telegraph.target.x, telegraph.target.y, telegraph.target.z);
       positions.needsUpdate = true;
       telegraph.line.material.opacity = 0.16 + Math.abs(Math.sin(telegraph.life * 34)) * 0.72;
+      // A feint aborts partway through to bait a premature guard, then follows up fast.
+      if (telegraph.feint && telegraph.life <= telegraph.maxLife * 0.5) {
+        telegraph.enemy.feinting = false;
+        telegraph.enemy.cooldown = 0.35 + this.rng.range(0, 0.45);
+        disposeObject(telegraph.line);
+        this.telegraphs.splice(i, 1);
+        continue;
+      }
       if (telegraph.life <= 0) {
         this.spawnEnemyDisc(telegraph.enemy, telegraph.target);
+        telegraph.enemy.feinting = false;
         disposeObject(telegraph.line);
         this.telegraphs.splice(i, 1);
       }
@@ -1471,6 +1745,16 @@ export class ArenaMode {
     if (projectile.owner === 'player') this.score += 12;
     if (this.isARPresentation) {
       this.spawnPersistentBreach(impact, normal, color);
+      // The headline AR beat: a disc striking a real wall also cracks the floor
+      // beneath it, which breaks apart to reveal the digital world below.
+      if (normal.y < 0.5 && this.arRoom) {
+        // Offset inward from the wall so the floor crack lands inside the room.
+        const floorPoint = new THREE.Vector3(impact.x, this.arRoom.floorY, impact.z).addScaledVector(normal, 0.5);
+        floorPoint.y = this.arRoom.floorY;
+        if (this.roomContainsPoint(floorPoint.x, floorPoint.z, 0.05)) {
+          this.spawnPersistentBreach(floorPoint, UP.clone(), color);
+        }
+      }
       if (
         normal.z > 0.55 &&
         impact.z <= this.arRoom.minZ + 0.45 &&
@@ -1478,6 +1762,67 @@ export class ArenaMode {
       ) {
         projectile.crossedShell = true;
         this.fractureReality(impact);
+      }
+    }
+  }
+
+  // Floor "breaks apart": dark shards with neon edges pop up, tumble, and fade,
+  // exposing the neon tunnel of the digital world beneath the real floor.
+  spawnFloorShatter(position) {
+    const floorY = this.arRoom?.floorY ?? 0;
+    for (let index = 0; index < 9; index += 1) {
+      const size = 0.13 + this.random() * 0.16;
+      const shard = new THREE.Mesh(
+        new THREE.TetrahedronGeometry(size, 0),
+        new THREE.MeshStandardMaterial({
+          color: 0x04080d,
+          emissive: COLORS.cyan,
+          emissiveIntensity: 0.5,
+          metalness: 0.7,
+          roughness: 0.3,
+          transparent: true,
+          opacity: 1,
+        }),
+      );
+      const angle = this.random() * Math.PI * 2;
+      const distance = this.random() * 0.5;
+      shard.position.set(
+        position.x + Math.cos(angle) * distance,
+        floorY + 0.02,
+        position.z + Math.sin(angle) * distance,
+      );
+      this.root.add(shard);
+      this.floorShards.push({
+        mesh: shard,
+        vx: Math.cos(angle) * (0.4 + this.random() * 0.7),
+        vz: Math.sin(angle) * (0.4 + this.random() * 0.7),
+        vy: 1.2 + this.random() * 1.8,
+        spin: new THREE.Vector3((this.random() - 0.5) * 8, (this.random() - 0.5) * 8, (this.random() - 0.5) * 8),
+        life: 1.6,
+      });
+    }
+  }
+
+  updateFloorShards(dt) {
+    const floorY = this.arRoom?.floorY ?? 0;
+    for (let index = this.floorShards.length - 1; index >= 0; index -= 1) {
+      const shard = this.floorShards[index];
+      shard.life -= dt;
+      shard.vy -= 6 * dt;
+      shard.mesh.position.x += shard.vx * dt;
+      shard.mesh.position.z += shard.vz * dt;
+      shard.mesh.position.y += shard.vy * dt;
+      if (shard.mesh.position.y < floorY + 0.02) {
+        shard.mesh.position.y = floorY + 0.02;
+        shard.vy *= -0.3;
+      }
+      shard.mesh.rotation.x += shard.spin.x * dt;
+      shard.mesh.rotation.y += shard.spin.y * dt;
+      shard.mesh.rotation.z += shard.spin.z * dt;
+      if (shard.life <= 0.5) shard.mesh.material.opacity = Math.max(0, shard.life / 0.5);
+      if (shard.life <= 0) {
+        disposeObject(shard.mesh);
+        this.floorShards.splice(index, 1);
       }
     }
   }
@@ -1515,6 +1860,42 @@ export class ArenaMode {
     } else if (position.z > bounds.maxZ - DISC_RADIUS && velocity.z > 0) {
       position.z = bounds.maxZ - DISC_RADIUS;
       normal = new THREE.Vector3(0, 0, -1);
+    }
+
+    // Bank off arena obstacles — floating shards (spheres) and the central
+    // pylon (vertical cylinder). This is the banked-shot skill layer.
+    if (!normal && this.obstacles.length) {
+      for (const obstacle of this.obstacles) {
+        if (obstacle.type === 'pylon') {
+          const dx = position.x - obstacle.x;
+          const dz = position.z - obstacle.z;
+          const distanceSq = dx * dx + dz * dz;
+          const reach = obstacle.radius + DISC_RADIUS;
+          const withinHeight = position.y > obstacle.y - 0.2 && position.y < obstacle.y + obstacle.height + 0.2;
+          if (withinHeight && distanceSq < reach * reach && distanceSq > 1e-4) {
+            const inverse = 1 / Math.sqrt(distanceSq);
+            const obstacleNormal = new THREE.Vector3(dx * inverse, 0, dz * inverse);
+            if (velocity.dot(obstacleNormal) < 0) {
+              position.x = obstacle.x + obstacleNormal.x * reach;
+              position.z = obstacle.z + obstacleNormal.z * reach;
+              normal = obstacleNormal;
+              break;
+            }
+          }
+        } else {
+          const center = new THREE.Vector3(obstacle.x, obstacle.y, obstacle.z);
+          const delta = position.clone().sub(center);
+          const reach = obstacle.radius + DISC_RADIUS;
+          if (delta.lengthSq() < reach * reach && delta.lengthSq() > 1e-4) {
+            const obstacleNormal = delta.normalize();
+            if (velocity.dot(obstacleNormal) < 0) {
+              position.copy(center).addScaledVector(obstacleNormal, reach);
+              normal = obstacleNormal;
+              break;
+            }
+          }
+        }
+      }
     }
     if (!normal) return false;
 
@@ -1561,7 +1942,7 @@ export class ArenaMode {
       const projectile = this.projectiles[i];
       projectile.previous.copy(projectile.position);
       projectile.age += dt;
-      if (projectile.owner === 'player' && (projectile.age > 1.2 || projectile.returning)) {
+      if (projectile.owner === 'player' && (projectile.age > RETURN_T || projectile.returning)) {
         projectile.returning = true;
         const direction = playerCenter.clone().sub(projectile.position).normalize();
         projectile.velocity.lerp(direction.multiplyScalar(19), Math.min(1, dt * 7));
@@ -1578,17 +1959,21 @@ export class ArenaMode {
         for (const enemy of this.enemies) {
           if (enemy.dead || projectile.hitIds.has(enemy.id)) continue;
           const enemyCenter = enemy.mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0));
-          if (projectile.position.distanceToSquared(enemyCenter) < (enemy.role === 'PRIME' ? 1.6 : 1.05)) {
+          const hitR = enemy.tier === 2 ? 1.5 : 1.1;
+          if (projectile.position.distanceToSquared(enemyCenter) < hitR * hitR) {
             projectile.hitIds.add(enemy.id);
-            if (enemy.barrier?.visible && !projectile.returning) {
+            // Reactive guard beats a straight shot; bank around it instead.
+            if (enemy.guardActive > 0 && !projectile.returning) {
               projectile.returning = true;
-              this.score += 75;
-              this.bursts.push(createParticleBurst(this.root, projectile.position.clone(), enemy.color, 14, 0.1));
-              this.shockwaves.push(createShockwave(this.root, projectile.position.clone(), enemy.color));
-              this.world.announce('WARDEN DEFLECT // ATTACK BETWEEN PULSES', 0.9);
+              enemy.guardActive = Math.max(enemy.guardActive, 0.2);
+              this.bursts.push(createParticleBurst(this.root, projectile.position.clone(), COLORS.ice, 12, 0.09));
+              this.shockwaves.push(createShockwave(this.root, projectile.position.clone(), COLORS.ice));
+              this.world.announce(`${enemy.program} GUARD // BANK IT`, 0.8);
               break;
             }
-            this.damageEnemy(enemy, projectile.damage * (projectile.returning ? 1.25 : 1), projectile.position.clone());
+            // A hit that also knocks a program through a floor breach costs two.
+            const pipCost = this.isARPresentation && this.isFloorOpening(enemy.mesh.position.x, enemy.mesh.position.z) ? 2 : 1;
+            this.damageEnemy(enemy, pipCost, projectile.position.clone());
             projectile.returning = true;
             break;
           }
@@ -1615,7 +2000,7 @@ export class ArenaMode {
             continue;
           }
         }
-        this.damagePlayer(projectile.damage);
+        this.damagePlayer(this.isARPresentation && this.getOpeningAtPoint(playerCenter, true) ? 2 : 1);
         this.removeProjectile(i);
         continue;
       }
@@ -1680,11 +2065,23 @@ export class ArenaMode {
 
     this.comboTimer -= dt;
     if (this.comboTimer <= 0) this.combo = 0;
+
+    // Campaign state machine: brief intro before the fight, then a pause on the
+    // round result before the next round / program / match resolution.
+    if (this.matchState === 'intro') {
+      this.stateTimer -= dt;
+      if (this.stateTimer <= 0) this.matchState = 'fight';
+    } else if (this.matchState === 'roundOver') {
+      this.stateTimer -= dt;
+      if (this.stateTimer <= 0) this.advanceCampaign();
+    }
+
     this.updatePlayer(dt);
     this.updateEnemies(dt);
     this.updateTelegraphs(dt);
     this.updateProjectiles(dt);
     this.updateBreaches(dt);
+    this.updateFloorShards(dt);
     updateBursts(this.bursts, dt);
     updateShockwaves(this.shockwaves, dt, this.world.camera);
     updateEnvironment(this.environment, this.elapsed, dt);
@@ -1710,24 +2107,24 @@ export class ArenaMode {
       }
     });
 
-    if (this.waveDelay > 0) {
-      this.waveDelay -= dt;
-      if (this.waveDelay <= 0) {
-        this.wave += 1;
-        this.spawnWave(this.wave);
-        this.world.announce(this.wave === 3 ? 'PRIME SENTINEL // FINAL SYNC' : `SYNC ${this.wave} // SIGNAL RISING`, 2);
-      }
-    }
-
+    const program = PROGRAMS[this.tier];
+    const arena = ARENAS[this.tier];
+    const pips = '◆'.repeat(this.playerPips) + '◇'.repeat(PIPS - this.playerPips);
+    const objective =
+      this.matchState === 'intro'
+        ? `ROUND ${this.round}/3 // READY`
+        : this.matchState === 'roundOver'
+          ? this.pWins > this.eWins ? 'ROUND WON' : 'ROUND LOST'
+          : `ROUND ${this.round}/3 · ${pips} · MATCH ${this.pWins}–${this.eWins}`;
     this.world.updateHUD({
-      mode: 'SHARD ARENA',
+      mode: `${program} · ${arena}`,
       score: this.score,
-      health: this.player.health,
+      health: Math.round((this.playerPips / PIPS) * 100),
       resource: this.player.shield,
-      resourceLabel: this.charging ? `CHARGE ${Math.round(this.charge * 100)}%` : `GUARD ${Math.round(this.player.shield)}% · ${this.player.discs}/2 SHARDS`,
-      objective: this.enemies.some((enemy) => !enemy.dead)
-        ? `SYNC ${this.wave} · ${this.enemies.filter((enemy) => !enemy.dead).length} SENTINELS ACTIVE`
-        : 'RECALIBRATING THE GRID',
+      resourceLabel: this.charging
+        ? `CHARGE ${Math.round(this.charge * 100)}%`
+        : `GUARD ${Math.round(this.player.shield)}% · ${this.player.discs}/2 DISCS`,
+      objective,
       combo: this.combo > 1 ? `x${this.combo} CHAIN` : '',
       speed: '',
     });
@@ -1763,7 +2160,16 @@ export class ArenaMode {
           ? +Math.min(...activeEnemyUprightDots).toFixed(3)
           : null,
       },
-      wave: this.wave,
+      campaign: {
+        program: PROGRAMS[this.tier],
+        arena: ARENAS[this.tier],
+        tier: this.tier,
+        round: this.round,
+        state: this.matchState,
+        pWins: this.pWins,
+        eWins: this.eWins,
+        playerPips: this.playerPips,
+      },
       player: {
         x: +this.player.position.x.toFixed(2),
         y: +this.player.position.y.toFixed(2),
@@ -1781,11 +2187,13 @@ export class ArenaMode {
         .filter((enemy) => !enemy.dead)
         .map((enemy) => ({
           id: enemy.id,
+          program: enemy.program,
           role: enemy.role,
           x: +enemy.mesh.position.x.toFixed(1),
           y: +enemy.mesh.position.y.toFixed(1),
           z: +enemy.mesh.position.z.toFixed(1),
-          health: Math.max(0, Math.round(enemy.health)),
+          pips: enemy.pips,
+          guarding: enemy.guardActive > 0,
           attackIn: +Math.max(0, enemy.cooldown).toFixed(1),
           visual: enemy.rig ? 'skinned_digital_human' : 'loading_fallback',
           motion: this.telegraphs.some((telegraph) => telegraph.enemy === enemy)
