@@ -1,0 +1,31 @@
+id,role,type,description,size/ratio,style line ref,source
+skybox_pano,"scene background sphere in VR and desktop modes",image,"equirectangular 360 panorama of a black digital void with a distant glowing horizon grid and faint cyan data auroras",16:9 1k,STYLE FORMULA v1,generate
+thumb_card,"marketplace thumbnail and OG image",image,"first-person armored gauntlet hurling a glowing energy disc between neon floating platforms over a void, bold title text GRID PROTOCOL",16:9 1k,STYLE FORMULA v1,generate
+favicon_icon,"site favicon and catalog icon",image,"single glowing cyan energy disc ring with bright core centered on black",1:1 1k,STYLE FORMULA v1,generate
+tex_floor_grid,"cycle arena and hub floor texture",procedural-texture,"near-black graphite tile with electric cyan grid lines drawn at exact tile period so wrapping is mathematically seamless",512x512 pot,STYLE FORMULA v1,procedural
+tex_platform_hex,"disc arena platform tile emissive pattern",procedural-texture,"dark tile with cyan rim glow used per-instance on platform ring tiles",256x256 pot,STYLE FORMULA v1,procedural
+tex_wall_energy,"energy wall scanline texture",procedural-texture,"translucent cyan scanline pattern tiling in both axes",256x256 pot,STYLE FORMULA v1,procedural
+mdl_enemy_program,"disc arena opponent character",procedural-3d,"sleek humanoid assembled from beveled primitives with amber-orange emissive seams, code-animated: idle sway, windup, throw, stagger, decompile fall",1.9 units tall,STYLE FORMULA v1,procedural
+mdl_light_cycle,"player cockpit and AI vehicles in cycle run",procedural-3d,"low sleek two-wheel vehicle from primitives with glowing wheel tori and canopy; player cyan, enemies amber/magenta/green signal hues",1 unit tall,STYLE FORMULA v1,procedural
+mdl_disc,"light disc weapon",procedural-3d,"glowing torus ring with bright emissive core; cyan for player, amber for enemy",0.35 unit diameter,STYLE FORMULA v1,procedural
+mdl_gauntlet,"VR controller hands and desktop viewmodel",procedural-3d,"angular forearm gauntlet with cyan seam glow attached to XR controllers",0.25 unit,STYLE FORMULA v1,procedural
+mus_hub,"hub and menu music loop",audio-music,"calm dark synthwave, slow analog pads, sparse distant pulse, solemn digital-void mood",40s loop,STYLE FORMULA v1 mood,generate
+mus_combat,"combat and cycle-run music loop",audio-music,"driving dark synthwave, pulsing bass arpeggio, tense relentless energy",30s loop,STYLE FORMULA v1 mood,generate
+sfx_disc_throw,"disc throw",audio-sfx,"sharp energetic whoosh of a heavy energy disc launched fast",1s,-,generate
+sfx_ricochet,"disc banks off an energy wall",audio-sfx,"bright electric zap ricochet with short metallic ring",1s,-,generate
+sfx_shatter,"decompile shatter for combatants and floor tiles",audio-sfx,"glassy digital shatter burst dissolving into fizzing particles",2s,-,generate
+sfx_cycle_engine,"light cycle engine",audio-sfx,"smooth futuristic electric turbine hum, steady continuous loop",4s loop,-,generate
+sfx_crash,"cycle hits a light wall",audio-sfx,"hard electric crash explosion with digital debris scatter",2s,-,generate
+sfx_synth_pack,"UI blips, disc catch, guard deflect, boost surge, round win/lose stings",procedural-audio,"synthesized at runtime with WebAudio oscillators, levels per audio mix law",-,STYLE FORMULA v1 mood,procedural
+tex_wall_hex,"disc arena energy wall hex field (v2)",procedural-texture,"hexagon grid line pattern at exact tile period, additive cyan tint, slow scroll",256x256 pot,STYLE FORMULA v1,procedural
+mdl_monolith,"distant void architecture (v2)",procedural-3d,"dark graphite slabs 34-70 units tall with cyan circuit seams ringing both arenas",varied,STYLE FORMULA v1,procedural
+mdl_ar_hole,"AR floor pit (v2)",procedural-3d,"cyan-rimmed shaft cut into the real floor, ring lights descending to a glowing grid world at the bottom",r 0.5-1.0,STYLE FORMULA v1,procedural
+fx_bank_flash,"AR wall bank flash (v2)",procedural-3d,"transient additive hex panel where a disc banks off the invisible room wall",0.5 unit,STYLE FORMULA v1,procedural
+ui_minimap,"cycle run tactical map (v2)",procedural-ui,"256px canvas redrawn at 8 Hz: arena bounds, all trails and cycle positions; DOM top-right on flat screens, camera-anchored panel in VR",256x256,STYLE FORMULA v1,procedural
+ui_dash_console,"cockpit dash console (v3)",procedural-ui,"256x128 canvas on the cycle dash: live speed, boost bar, tier; redrawn at 4 Hz",256x128,STYLE FORMULA v1,procedural
+mdl_cockpit_v3,"rider cockpit upgrades (v3)",procedural-3d,"grippable glowing handlebar handles, interior conduits, hinged transparent canopy that seals before each round",-,STYLE FORMULA v1,procedural
+fx_speed_lines,"rider speed streaks (v3)",procedural-3d,"24 instanced additive streaks flowing past the rider while running",-,STYLE FORMULA v1,procedural
+amb_ambient_set,"living environment set (v3)",procedural-3d,"orbiting data ribbons, patrol barges, light beams, distant traffic streaks, drifting mote fields, pulsing walls, flowing void grid, slow sky rotation",-,STYLE FORMULA v1,procedural
+mdl_enemy_v4,"organic program body (v4)",procedural-3d,"capsule limbs, cylinder torso, spherical shoulders/boots, curved visor band, emissive circuit-line suit that glows from the surface - reads as a Tron program not blocks",1.9 units,STYLE FORMULA v1,procedural
+mdl_cycle_v4,"digital-sleek cycle (v4)",procedural-3d,"rounded capsule fuselage, cone nose/tail, arched signature wheel guards, tube light strips",1 unit,STYLE FORMULA v1,procedural
+fx_ar_breach,"AR wall/floor breach (v4)",procedural-3d,"disc impact blasts a glowing grid window with cyan rim into the real surface, opening onto the digital world; grows in, lingers ~7s, fades",0.5-1 unit,STYLE FORMULA v1,procedural
